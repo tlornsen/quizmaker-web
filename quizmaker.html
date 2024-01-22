@@ -1,0 +1,3524 @@
+<!DOCTYPE html> 
+<html>
+<head>
+<title>Quizmaker</title>
+	<script src="fancytree/lib/jquery.js"></script>
+	<script src="fancytree/src/jquery-ui-dependencies/jquery.fancytree.ui-deps.js"></script>
+	<script src="tinymce/js/tinymce/tinymce.min.js" referrerpolicy="origin"></script>
+
+	<link href="fancytree/src/skin-lion/ui.fancytree.css" rel="stylesheet">
+	<link href="style/quizmaker.css" rel="stylesheet">
+	<script src="fancytree/src/jquery.fancytree.js"></script>
+	
+<script type="text/javascript">
+//To do:
+//- feature: bulk-edit
+//- feature: search
+//- feature: copy and paste questions
+//- move questions (drag/drop)
+//- export: as text, etc.
+//- remove leading numbers/clean up formatting
+//
+//Moodle stores questions sequentially like this:
+//1.question (type=category)
+//2. question
+//3. question
+//etc.
+//4. question (type=category)
+//etc.
+// so the categories are basically dummy-questions and the only way to know a question's category is to find the next-higher category-type question.
+// However, we will not do this for our database. Instead we will store the corresponding category with each question. This way, questions should show up in the correct category, no matter where they are in the database.
+
+let questionbank = [
+{
+"type":"category",
+"category":"top",
+"name":"Default question",
+"question_text":"This is your question text",
+"tags":[],
+"choices": [],
+"feedback":[],
+"value":[],
+"general_feedback":"",
+"default_grade":1,
+"penalty":0.33,
+"case_sensitive":false,
+"numbering":0,
+"shuffle_answers": true,
+"single_answer": true,
+"tolerance":[],		
+"unitgradingtype":0,
+"unitpenalty":0,
+"showunits":0,
+"unitsleft":0,
+"unitname":[],
+"multiplier":[],
+"subquestion_text":[],
+"subquestion_answer":[],
+"image_name":"",	//for dragdropmarker-type
+"image_data":"",
+"drag_no":[],
+"drag_text":[],
+"drag_noofdrags":[],
+"drop_no":[],
+"drop_shape":[],
+"drop_coords":[],
+"drop_choice":[],
+"issue":""
+}]
+
+var question_categories=[];	//we'll keep track of the categories in this array
+var answer_numbering = ["none", "abc", "ABCD", "123"];
+var char_numbering_lower = "abcdefghijklmnopqrstuvwxyz";
+var char_numbering_upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+var sidebar_visible=true;
+var current_question=-1;
+var current_file="";
+var del_tags =["<p>", "</p>", "<b>", "</b", "<i>", "</i>", "<pre>", "</pre>"];
+//the settings for when you show the selected questions as text
+var settings_text_strip_html = true;
+var settings_text_before_question = "";
+var settings_text_after_question = "<br>";
+var settings_text_style_questiontext = "font-weight: bold;";
+var settings_text_style_choices = "font-weight: normal;";
+var settings_text_answer_text = "Answer: ";
+var settings_text_show_answerkey = true;
+var settings_text_number_questions = true;
+var settings_text_shuffle_questions = false;
+var settings_text_columns=1;
+var settings_text_rows_per_page=5;
+var settings_text_title="Quiz made using Quizmaker";
+//the settings for the search
+var settings_search_searchterm = "";
+var settings_search_name = true;	//search the question name?
+var settings_search_text = true;	//search the question text?
+var settings_search_choices = true;	//search the choices?
+var settings_search_tags = true;	//search the tags?
+var settings_search_casesensitive = true;
+var settings_search_wholewords = false;
+var settings_search_onlyissues = false;
+var sandbox_instructions='**INSTRUCTIONS**\r\n1. Enter questions here\r\n2. Select multiple questions of the same type\r\n3. Select the correct question type in the dropdown-menu below\r\n4. Adjust the settings and click "Import" to insert the questions to the questionbank at the current position.\r\n\r\n**EXAMPLES**\r\nThis is a multiple choice question text with 5 choices.\r\nThis is choice 1\r\nThis is choice 2\r\nThis is choice 3\r\nThis is choice 4\r\nThis is choice 5\r\n\r\nThis is another a multiple choice question text with 3 choices.\r\nThis is another choice 1\r\nThis is another choice 2\r\nThis is another choice 3\r\n\r\nThis could be a shortanswer question.\r\nAnswer\r\nAnother answer\r\n\r\nThis could be a shortanswer question with (answer1/answer2) embedded answers.\r\nUse "(/)" to extract them.\r\nThis could be a True/False question.\r\nAnswer: True\r\n\r\nThis could be a matching question:\r\nFruits or veggies?\r\nApples,Fruit\r\nBananas,Fruit\r\nCabbage,Veggie\r\nTomato,Veggie';
+
+function new_file(){
+current_question=0;
+questionbank.length=0;
+var question = {
+		"type": "category",
+		"name": "top",
+		"category": "top",
+		"issue":""
+		};
+		questionbank.push(question);
+		display_questionbank();
+}
+
+//some housekeeping after loading a Moodle XML-file. Some of these files are a bit messy, so we're trying to clean things up.
+function post_load_housekeeping()
+{
+	var numcats=0;
+    //go through all imported categories and, if needed, create dummy questions for the empty categories
+    for (var i=0; i<questionbank.length; i++)
+        {
+            if (questionbank[i].type == "category")
+            {
+			numcats++;
+            var cats=questionbank[i].category.split("/");   //split every category ("top/first/second") into categories ("top,first,second")
+            var dum_cats="";
+            for (var k=0; k<cats.length; k++)
+            {
+                    if (k ==0)
+                        dum_cats += cats[k];
+                        else
+                        dum_cats += "/"+cats[k];   //check if there is already a dummy category for this one in the question bank
+                    if (get_dumcat_key(dum_cats) == -1 ) //if the dummy category is not yet in the question bank, because it's empty, we'll create it
+                    {
+                        var q= {"name":"", "type":"category", "category":""};
+                        q.name=dum_cats.substring(dum_cats.lastIndexOf("/")+1);
+                        q.category=dum_cats;
+                        questionbank.push(q);
+						console.log("Created missing empty question: "+dum_cats);
+                    }
+                }
+            }
+        }
+		
+	if (numcats==0) {	//this can happen when you export a single question in Moodle and not the entire questionbank
+		var q= {"name":"top", "type":"category", "category":"top"};
+	    questionbank.push(q);
+		console.log("Created missing empty question: top");
+	}
+}
+
+
+//load a Moodle-XML file
+function load_file(evt) {
+ var f = evt.target.files[0]; 
+ var current_category = "top";
+ 
+ if (f) {
+      var r = new FileReader();
+      r.onload = function(e) { 
+	      var contents = e.target.result;
+		  	parser = new DOMParser();
+			  try {
+                    xmlDoc = parser.parseFromString (contents, "text/xml");
+                } catch (e) {
+                        // if text is not well-formed, 
+                        // it raises an exception in IE from version 9
+                    alert ("XML parsing error.");
+                    return false;
+                };
+			questionbank.length=0;
+			x=xmlDoc.getElementsByTagName("question");
+			//alert(x.length+ " Questions");
+			for (var i=0; i<x.length; i++) {
+				var question = {
+				"type":"category",
+				"choices": [],
+				"feedback":[],
+				"value":[],
+				"tags":[],
+				"tolerance":[],
+				"multiplier":[],
+				"unitname":[],
+				"subquestion_text":[],
+				"subquestion_answer":[],
+				"image_name":"",	//for dragdropmarker-type
+				"image_data":"",
+				"drag_no":[],
+				"drag_text":[],
+				"drag_noofdrags":[],
+				"drop_no":[],
+				"drop_shape":[],
+				"drop_coords":[],
+				"drop_choice":[],
+				"issue":""
+				};
+				question.type=x[i].getAttribute('type');
+				question.category=current_category;
+				if (x[i].getElementsByTagName("tag"))	//if there are any question tags, read them
+				{
+					var t=x[i].getElementsByTagName("tag");
+						for (var k=0; k<t.length;k++)
+						{
+							question.tags.push(t[k].getElementsByTagName('text')[0].childNodes[0].nodeValue);
+						}
+				}
+				
+				switch (question.type)
+				{
+				case "category": {                  
+					question.category = x[i].getElementsByTagName('text')[0].firstChild.nodeValue;  //read the full category path
+                    current_category = question.category;   //store the current category, which will be assigned to all following questions
+                    question.name=question.category.substring(question.category.lastIndexOf("/")+1);  //name the dummy question (not really necessary though)
+                    if (get_dumcat_key(question.category) == -1) questionbank.push(question);	//if it doesn't already exist, store the category as a dummy question in the database
+					break;
+					}
+
+				case "description": 
+					{
+					question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+					question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;
+					questionbank.push(question);	//store the imported question in the database	
+					break;					
+					}
+				case "shortanswer": 
+					{
+					question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+					question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;	
+					if (x[i].getElementsByTagName('usecase')[0]) 
+						question.case_sensitive=(x[i].getElementsByTagName('usecase')[0].childNodes[0].nodeValue == "1");
+					if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+					if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 0.33;}	//if the defaultgrade is empty, make it 0.33
+						
+						var choices=x[i].getElementsByTagName('answer');
+						for (var choice_nr=0; choice_nr<choices.length; choice_nr++) 
+						{
+							if (choices[choice_nr].getElementsByTagName('text')[0] && choices[choice_nr].getElementsByTagName('text')[0].childNodes[0]) 
+								if (choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue =="")
+								{continue;}	//if the choice contains no text, we won't import it
+								else
+							{question.choices.push(choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue);}
+						
+							if (choices[choice_nr].getAttribute('fraction'))			
+								question.value.push(choices[choice_nr].getAttribute('fraction'));
+								else question.value.push(0);								
+												
+							if (choices[choice_nr].getElementsByTagName('feedback')[0] && choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0])
+							question.feedback.push(choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0].nodeValue);				
+						}
+						
+					questionbank.push(question);	//store the imported question in the database	
+					break;					
+					}
+				case "multichoice": 
+					{
+					question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+					question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;	
+					if (x[i].getElementsByTagName('single')[0]) 
+						question.single_answer=(x[i].getElementsByTagName('single')[0].childNodes[0].nodeValue == "true");
+					if (x[i].getElementsByTagName('shuffleanswers')[0])
+						question.shuffle_answers=(x[i].getElementsByTagName('shuffleanswers')[0].childNodes[0].nodeValue == "1");
+					if (x[i].getElementsByTagName('answernumbering')[0])
+						question.numbering= answer_numbering.indexOf(x[i].getElementsByTagName('answernumbering')[0].childNodes[0].nodeValue);
+					if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+					if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 0.33;}	//if the defaultgrade is empty, make it 0.33
+						
+						var choices=x[i].getElementsByTagName('answer');
+						for (var choice_nr=0; choice_nr<choices.length; choice_nr++) 
+						{
+							if (choices[choice_nr].getElementsByTagName('text')[0] && choices[choice_nr].getElementsByTagName('text')[0].childNodes[0]) 
+								if (choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue =="")
+								{continue;}	//if the choice contains no text, we won't import it
+								else
+							{question.choices.push(choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue);}
+						
+							if (choices[choice_nr].getAttribute('fraction'))			
+								question.value.push(choices[choice_nr].getAttribute('fraction'));
+								else question.value.push(0);								
+												
+							if (choices[choice_nr].getElementsByTagName('feedback')[0] && choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0])
+							question.feedback.push(choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0].nodeValue);				
+						}
+						
+					questionbank.push(question);	//store the imported question in the database		
+					break;				
+					}
+					case "truefalse": 
+					{
+						question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+						question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;	
+					if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+					if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 1;}	//if the defaultgrade is empty, make it 1
+						
+						var choices=x[i].getElementsByTagName('answer');
+						for (var choice_nr=0; choice_nr<choices.length; choice_nr++) 
+						{
+							if (choices[choice_nr].getElementsByTagName('text')[0] && choices[choice_nr].getElementsByTagName('text')[0].childNodes[0]) 
+								if (choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue =="")
+								{continue;}	//if the choice contains no text, we won't import it
+								else
+							{question.choices.push(choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue);}
+						
+							if (choices[choice_nr].getAttribute('fraction'))			
+								question.value.push(choices[choice_nr].getAttribute('fraction'));
+								else question.value.push(0);								
+												
+							if (choices[choice_nr].getElementsByTagName('feedback')[0] && choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0])
+							question.feedback.push(choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0].nodeValue);				
+						}
+						
+					questionbank.push(question);	//store the imported question in the database		
+					break;				
+					}
+					case "ddwtos":	//the new "drag and drop into text"-questiontype
+						{
+							question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+							question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;	
+							if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+							{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+							if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+							{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 1;}	//if the defaultgrade is empty, make it 1
+							if (x[i].getElementsByTagName('shuffleanswers')[0])
+						question.shuffle_answers=(x[i].getElementsByTagName('shuffleanswers')[0].childNodes[0].nodeValue == "1");
+
+						var choices=x[i].getElementsByTagName('dragbox');
+						for (var choice_nr=0; choice_nr<choices.length; choice_nr++) 
+						{
+							if (choices[choice_nr].getElementsByTagName('text')[0] && choices[choice_nr].getElementsByTagName('text')[0].childNodes[0]) 
+								if (choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue =="")
+								{continue;}	//if the choice contains no text, we won't import it
+								else
+							{question.choices.push(choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue);}
+																		
+							if (choices[choice_nr].getElementsByTagName('group')[0] && choices[choice_nr].getElementsByTagName('group')[0].childNodes[0])
+							question.value.push(choices[choice_nr].getElementsByTagName('group')[0].childNodes[0].nodeValue);				//we'll store the group number in the value-array, because we don't need it for this question type
+						}
+					questionbank.push(question);	//store the imported question in the database		
+					break;				
+						}
+					case "numerical": 
+					{
+					question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+					question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;	
+
+					if (x[i].getElementsByTagName('unitgradingtype')[0]) 
+						question.unitgradingtype=(x[i].getElementsByTagName('unitgradingtype')[0].childNodes[0].nodeValue);
+
+					if (x[i].getElementsByTagName('unitpenalty')[0]) 
+						question.unitpenalty=(x[i].getElementsByTagName('unitpenalty')[0].childNodes[0].nodeValue);
+
+					if (x[i].getElementsByTagName('showunits')[0]) 
+						question.showunits=(x[i].getElementsByTagName('showunits')[0].childNodes[0].nodeValue);
+
+					if (x[i].getElementsByTagName('unitsleft')[0]) 
+						question.unitsleft=(x[i].getElementsByTagName('unitsleft')[0].childNodes[0].nodeValue);
+
+					if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+
+					if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 0.33;}	//if the defaultgrade is empty, make it 0.33
+						
+						var choices=x[i].getElementsByTagName('answer');	//get all the answers
+						for (var choice_nr=0; choice_nr<choices.length; choice_nr++) 
+						{
+							if (choices[choice_nr].getElementsByTagName('text')[0] && choices[choice_nr].getElementsByTagName('text')[0].childNodes[0]) 
+								if (choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue =="")
+								{continue;}	//if the choice contains no text, we won't import it
+								else
+							{question.choices.push(choices[choice_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue);}
+						
+							if (choices[choice_nr].getAttribute('fraction'))			
+								question.value.push(choices[choice_nr].getAttribute('fraction'));
+								else question.value.push(0);								
+												
+							if (choices[choice_nr].getElementsByTagName('feedback')[0] && choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0])
+							question.feedback.push(choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0].nodeValue);
+
+							if (choices[choice_nr].getElementsByTagName('tolerance')[0] && choices[choice_nr].getElementsByTagName('tolerance')[0].childNodes[0])
+							question.tolerance.push(choices[choice_nr].getElementsByTagName('tolerance')[0].childNodes[0].nodeValue);
+							else question.tolerance.push(0);			
+						}
+							var units=x[i].getElementsByTagName('unit');
+							for (var unit_nr=0;unit_nr<units.length; unit_nr++) 
+							{
+								if (units[unit_nr].getElementsByTagName('multiplier')[0] && units[unit_nr].getElementsByTagName('multiplier')[0].childNodes[0])
+									question.multiplier.push(units[unit_nr].getElementsByTagName('multiplier')[0].childNodes[0].nodeValue);
+								if (units[unit_nr].getElementsByTagName('unit_name')[0] && units[unit_nr].getElementsByTagName('unit_name')[0].childNodes[0])
+									question.unitname.push(units[unit_nr].getElementsByTagName('unit_name')[0].childNodes[0].nodeValue);
+								console.log("Importing unit");
+							}
+						
+					questionbank.push(question);	//store the imported question in the database	
+					break;					
+					}
+					case "matching": {
+						question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+						question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;
+						if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+						if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 0.33;}	//if the defaultgrade is empty, make it 0.33
+						if (x[i].getElementsByTagName('shuffleanswers')[0])
+						question.shuffle_answers=(x[i].getElementsByTagName('shuffleanswers')[0].childNodes[0].nodeValue == "true");	//for some reason this is true/false, not 1/0 like in multichoice questions
+						var subquestions=x[i].getElementsByTagName('subquestion');
+							for (var subquestion_nr=0;subquestion_nr<subquestions.length; subquestion_nr++) 
+							{
+								if (subquestions[subquestion_nr].getElementsByTagName('text')[0] && subquestions[subquestion_nr].getElementsByTagName('text')[0].childNodes[0])
+									question.subquestion_text.push(strip_html(subquestions[subquestion_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue, 1));
+								if (subquestions[subquestion_nr].getElementsByTagName('answer')[0] && subquestions[subquestion_nr].getElementsByTagName('answer')[0].childNodes[0])
+									question.subquestion_answer.push(strip_html(subquestions[subquestion_nr].getElementsByTagName('answer')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue, 1));	//the format is <subquestion><text></text><answer><text></text></answer></subquestion>
+							}
+						questionbank.push(question);	//store the imported question in the database	
+						break;
+					}
+					case "ddmarker": {
+						question.name=x[i].getElementsByTagName('text')[0].firstChild.nodeValue;
+						question.question_text=x[i].getElementsByTagName('questiontext')[0].getElementsByTagName('text')[0].childNodes[0].nodeValue;
+						if (x[i].getElementsByTagName('defaultgrade')[0] && x[i].getElementsByTagName('defaultgrade')[0].childNodes[0])
+						{question.default_grade= x[i].getElementsByTagName('defaultgrade')[0].childNodes[0].nodeValue;} else {question.default_grade = 1;}	//if the defaultgrade is empty, make it 1
+						if (x[i].getElementsByTagName('penalty')[0] && x[i].getElementsByTagName('penalty')[0].childNodes[0])
+						{question.penalty= x[i].getElementsByTagName('penalty')[0].childNodes[0].nodeValue;} else {question.penalty = 0.33;}	//if the defaultgrade is empty, make it 0.33
+						if (x[i].getElementsByTagName('shuffleanswers')[0]) question.shuffle_answers = "true"; else question.shuffle_answers = "false";
+
+						question.image_name=x[i].getElementsByTagName('file')[0].getAttribute('name');
+						question.image_data=x[i].getElementsByTagName('file')[0].childNodes[0].nodeValue;
+
+						var drag=x[i].getElementsByTagName('drag');
+							for (var drag_nr=0;drag_nr<drag.length; drag_nr++) 
+							{
+								if (drag[drag_nr].getElementsByTagName('no')[0] && drag[drag_nr].getElementsByTagName('no')[0].childNodes[0])	//get the "No"-value
+									question.drag_no.push(drag[drag_nr].getElementsByTagName('no')[0].childNodes[0].nodeValue);
+								if (drag[drag_nr].getElementsByTagName('text')[0] && drag[drag_nr].getElementsByTagName('text')[0].childNodes[0])
+									question.drag_text.push(strip_html(drag[drag_nr].getElementsByTagName('text')[0].childNodes[0].nodeValue, 1));	//get the text of this drag.
+								if (drag[drag_nr].getElementsByTagName('noofdrags')[0] && drag[drag_nr].getElementsByTagName('noofdrags')[0].childNodes[0])	//get the "Noofdrags"-value
+									question.drag_noofdrags.push(drag[drag_nr].getElementsByTagName('noofdrags')[0].childNodes[0].nodeValue);
+								if (drag[drag_nr].getElementsByTagName('infinite')[0]) question.drag_noofdrags[drag_nr]=0;
+
+							}
+
+							var drop=x[i].getElementsByTagName('drop');
+							for (var drop_nr=0;drop_nr<drop.length; drop_nr++) 
+							{
+								if (drop[drop_nr].getElementsByTagName('no')[0] && drop[drop_nr].getElementsByTagName('no')[0].childNodes[0])	//get the "No"-value
+									question.drop_no.push(drop[drop_nr].getElementsByTagName('no')[0].childNodes[0].nodeValue);
+								if (drop[drop_nr].getElementsByTagName('shape')[0] && drop[drop_nr].getElementsByTagName('shape')[0].childNodes[0])
+									question.drop_shape.push(strip_html(drop[drop_nr].getElementsByTagName('shape')[0].childNodes[0].nodeValue, 1));	//get the shape of this drop.
+								if (drop[drop_nr].getElementsByTagName('coords')[0] && drop[drop_nr].getElementsByTagName('coords')[0].childNodes[0])	//get the coordinates of this drop
+									question.drop_coords.push(drop[drop_nr].getElementsByTagName('coords')[0].childNodes[0].nodeValue);
+								if (drop[drop_nr].getElementsByTagName('choice')[0] && drop[drop_nr].getElementsByTagName('choice')[0].childNodes[0])	//get the "Choice"-value
+									question.drop_choice.push(parseInt(drop[drop_nr].getElementsByTagName('choice')[0].childNodes[0].nodeValue)-1);	//Moodle starts counting these at 1, so let's subtract 1 to start at 0. It'll avoid confusion later on. When we save this question type, we'll add 1 again to make Moodle happy.
+							}
+						questionbank.push(question);	//store the imported question in the database	
+						break;
+					}
+					default: {
+					break;
+					}
+					
+				}
+			}
+            post_load_housekeeping();
+            display_questionbank();
+      }
+	r.readAsText(f);
+	current_file=$("#fileinput")[0].value;
+	$("#fileinput")[0].value = '';		//otherwise the file dialogue won't open if we want to upload the same file again
+	}
+}
+
+//adds an empty choice to question q at choice position nr
+function add_choice(q, nr)
+{    
+	if (questionbank[q].type=="matching")
+		{
+			questionbank[q].subquestion_answer.splice(nr+1,0,"");
+			questionbank[q].subquestion_text.splice(nr+1,0,"");
+			return;
+		}
+    questionbank[q].choices.splice(nr+1,0,"");
+    questionbank[q].feedback.splice(nr+1,0,"");
+    questionbank[q].value.splice(nr+1,0,"");
+	if (questionbank[q].type=="number") questionbank[q].tolerance.splice(nr+1,0,"");
+}
+
+//deletes the choice in question q at choice position nr
+function del_choice(q,nr)
+{   
+	if (questionbank[q].type=="matching")
+		{
+			questionbank[q].subquestion_answer.splice(nr,1);
+			questionbank[q].subquestion_text.splice(nr,1);
+			return;
+		}
+	if (questionbank[q].choices.length<2) return;
+    questionbank[q].choices.splice(nr,1);
+    questionbank[q].feedback.splice(nr,1);
+    questionbank[q].value.splice(nr,1);
+	if (questionbank[q].type=="number") questionbank[q].tolerance.splice(nr,1);
+}
+
+function show_multichoice_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+find_issues(nr);
+var html_code='<center><h3>Multiple Choice</h3></center>'+
+	'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Multiple_Choice_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">'+
+	'<br><input type="checkbox" id="qsingle_answer" value="'+q.single_answer+'" ';
+	if (q.single_answer) html_code +="checked";
+	html_code +='> <label for="qsingle_answer">Single Answer</label> '+
+	'<input type="checkbox" id="qshuffleanswers" value="'+q.shuffle_answers+'" ';
+	if (q.shuffle_answers) html_code+="checked";
+	html_code +='> <label for="qshuffleanswers">Shuffle Answers</label> '+
+	'<label for="qnumbering">&nbsp;&nbsp;Numbering: </label>'+
+	'<select id="qnumbering">';
+		  html_code+='<option value="0" ';
+		  if (q.numbering == 0) html_code+='selected="selected"';
+		  html_code+='>none</option>';
+		  html_code+='<option value="1" ';
+		  if (q.numbering == 1) html_code+='selected="selected"';
+		  html_code+='>abc</option>';
+		  html_code+='<option value="2" ';
+		  if (q.numbering == 2) html_code+='selected="selected"';
+		  html_code+='>ABCD</option>';		  
+		  html_code+='<option value="3" ';
+		  if (q.numbering == 3) html_code+='selected="selected"';
+		  html_code+='>123</option>'+
+		'</select>'+
+		'<div class="choices"><table><tr><th>#</th><th>Choices</th><th>Feedback</th><th>Value</th><th</th></tr>';
+		for (var i=0; i<q.choices.length;i++)
+			{
+            //add the table rows and input fields
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" class="choice_text" id="choice'+(i+1)+'" value="'+q.choices[i]+'"></td><td ><input type="text" class="choice_feedback" id="feedback'+(i+1)+'" value="'+q.feedback[i]+'"></td><td><input type="number" class="choice_value" id="value'+(i+1)+'" value="'+q.value[i]+'"></td><td class="choice_adddel"><button id="del_choice" class="del_btn" onclick="del_choice('+nr+','+i+'); show_multichoice_question('+nr+');">x</button><button id="del_choice" class="add_btn" onclick="add_choice('+nr+','+i+'); show_multichoice_question('+nr+');">+</button></td></tr>';
+            //and add the event handlers for all input fields
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+	tinymce.EditorManager.editors = [];
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+			editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+/*install event handlers to dynamically store values in questionbank*/
+	$('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	$('#qsingle_answer').change(function() {questionbank[nr].single_answer=$(this).prop('checked');find_issues(nr);});
+	$('#qshuffleanswers').change(function() {questionbank[nr].shuffle_answers=$(this).prop('checked');find_issues(nr);});
+	$('#qnumbering').on('change', function() {questionbank[nr].numbering=$(this).val();find_issues(nr);});
+    for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+	
+}
+
+function show_matching_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Matching Question</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Matching_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">'+
+	'<input type="checkbox" id="qshuffleanswers" value="'+q.shuffle_answers+'" ';
+	if (q.shuffle_answers) html_code+="checked";
+	html_code +='> <label for="qshuffleanswers">Shuffle Answers</label> '+
+	'<div class="choices"><table><tr><th>#</th><th>Subquestion</th><th>Answer</th><th></th></tr>';
+		for (var i=0; i<q.subquestion_text.length;i++)
+			{
+			html_code+='<tr><td>'+(i+1)+'</td><td><input type="text" class="choice_text" id="subquestion_text'+(i+1)+'" value="'+q.subquestion_text[i]+'"></td><td><input type="text" class="choice_feedback" id="subquestion_answer'+(i+1)+'" value="'+q.subquestion_answer[i]+'"></td><td class="choice_adddel"><button id="del_choice" class="del_btn" onclick="del_choice('+nr+','+i+'); show_matching_question('+nr+');">x</button><button id="add_choice" class="add_btn" onclick="add_choice('+nr+','+i+'); show_matching_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+	tinymce.EditorManager.editors = [];
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			        editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+      /*install event handlers to dynamically store values in questionbank*/
+	$('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	$('#qshuffleanswers').change(function() {questionbank[nr].shuffle_answers=$(this).prop('checked');find_issues(nr);});
+    for (var i=0; i<q.subquestion_text.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#subquestion_text'+(i+1)).on('input', function() {var cnr=this.id.substring("subquestion_text".length)-1; questionbank[nr].subquestion_text[cnr]=$(this).val();find_issues(nr);});
+		    $('#subquestion_answer'+(i+1)).on('input', function() {var cnr=this.id.substring("subquestion_answer".length)-1; questionbank[nr].subquestion_answer[cnr]=$(this).val();find_issues(nr);});
+			}
+}
+
+//returns the number of gaps in a ddwtos-question text. Returns -1, if there's an error
+function ddwtos_gap_count(txt)
+{
+	var count=0;
+	var startlines=txt.split("[[");
+	if (startlines.length<2) return (-1);
+	for (var i=1; i<startlines.length; i++)
+		{
+			if (startlines[i].indexOf("]]")<0) return (-1);
+			if (isNaN(startlines[i].substring(0, startlines[i].indexOf("]]")))) return (-1);
+			count++;
+		}
+	return(count);
+}
+
+//replaces all the [[number]] with underscores
+function ddwtos_gap_replace(txt)
+{
+	var regex = /(\[\[([^\]\]]+)\]\])/ig;
+    return (txt.replace(regex, "__________"));
+}
+
+function show_ddwtos_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Drag and Drop into Text</h3></center>'+
+	'Use double square brackets "[[n]]" with a number in place of the word you wish the students to find.<br>Add the missing words or phrases in the correctly numbered boxes below. (You may add extra ones to make the question harder.) If you want to use the same term for multiple gaps, use the same number for each gap. <br>If you tick "Shuffle", the display order will be shuffled.<br>'+
+	'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Drag_and_drop_into_text_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">'+
+	'<br><input type="checkbox" id="qshuffleanswers" value="'+q.shuffle_answers+'" ';
+	if (q.shuffle_answers) html_code+="checked";
+	html_code +='> <label for="qshuffleanswers">Shuffle Answers</label> '+
+	'<div class="choices"><table><tr><th>#</th><th>Text to drag</th><th>Group</th><th</th></tr>';
+		for (var i=0; i<q.choices.length;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" class="choice_text" id="choice'+(i+1)+'" value="'+q.choices[i]+'"></td><td><input type="number" class="choice_value" id="value'+(i+1)+'" value="'+q.value[i]+'"></td><td class="choice_adddel"> <button id="del_choice" class="del_btn" onclick="del_choice('+nr+','+i+'); show_ddwtos_question('+nr+');">x</button><button id="del_choice" class="add_btn" onclick="add_choice('+nr+','+i+');show_ddwtos_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+	tinymce.EditorManager.editors = [];
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+      /*install event handlers to dynamically store values in questionbank*/
+      $('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	$('#qshuffleanswers').change(function() {questionbank[nr].shuffle_answers=$(this).prop('checked');find_issues(nr);});
+    for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+}
+
+//adds an empty unit field to numerical question q at choice position nr
+function add_unit(q, nr)
+{    
+    questionbank[q].unitname.splice(nr+1,0,"");
+    questionbank[q].multiplier.splice(nr+1,0,"");
+}
+
+//deletes the unit in numerical question q at choice position nr
+function del_unit(q,nr)
+{   
+	if (questionbank[q].unitname.length<2) return;
+    questionbank[q].unitname.splice(nr,1);
+    questionbank[q].multiplier.splice(nr,1);
+}
+
+function show_numerical_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Numerical</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Numerical_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+    '<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+		'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'"><br>'+
+		'<div class="choices"><table ><tr><th>#</th><th>Answers</th><th>Feedback</th><th>Tolerance</th><th>Value</th><th></th></tr>';
+		for (var i=0; i<q.choices.length;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text"class="choice_text" id="choice'+(i+1)+'" value="'+q.choices[i]+'"></td><td><input type="text" class="choice_feedback" id="feedback'+(i+1)+'" value="'+q.feedback[i]+'"></td><td><input type="number" class="choice_tolerance" id="tolerance'+(i+1)+'" value="'+q.tolerance[i]+'"></td><td><input type="number" class="choice_value" id="value'+(i+1)+'" value="'+q.value[i]+'"></td><td class="choice_adddel"><button id="del_choice" class="del_btn" onclick="del_choice('+nr+','+i+'); show_numerical_question('+nr+');">x</button><button id="add_choice" class="add_btn" onclick="add_choice('+nr+','+i+'); show_numerical_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div><br>'+
+			'<label for="showunits">Unit handling: </label>'+
+	'<select id="qshowunits">';
+		  html_code+='<option value="3" ';
+		  if (q.showunits == 3) html_code+='selected="selected"';
+		  html_code+='>Units are not used.</option>';
+		  html_code+='<option value="0" ';
+		  if (q.showunits == 0) html_code+='selected="selected"';
+		  html_code+='>Units are optional.</option>';
+		  html_code+='<option value="2" ';
+		  if (q.showunits == 2) html_code+='selected="selected"';
+		  html_code+='>The unit must be given.</option>'+		  
+		'</select>';
+		if (q.showunits != 3)
+		{
+			html_code +='<br><label for="qunitpenalty">Unit penalty</label><input type="number" id="qunitpenalty" style="width:5em;" step="0.1" value="'+q.unitpenalty+'">'+
+			'<select id="qunitgradingtype">';
+                html_code+='<option value="0" ';
+                if (q.unitgradingtype == 0) html_code+='selected="selected"';
+                html_code+='>No penalty</option>';
+                html_code+='<option value="1" ';
+                if (q.unitgradingtype == 1) html_code+='selected="selected"';
+                html_code+='>as a fraction of the response grade</option>';
+                html_code+='<option value="2" ';
+                if (q.unitgradingtype == 2) html_code+='selected="selected"';
+                html_code+='>as fraction of the total grade</option>'+		  
+                '</select>'+
+                '<br><label for="qunitsleft">Units go: </label>'+
+			'<select id="qunitsleft">';
+			html_code+='<option value="0" ';
+			if (q.unitsleft == 0) html_code+='selected="selected"';
+			html_code+='>on the right, for example 1.00cm or 1.00km</option>';
+			html_code+='<option value="1" ';
+			if (q.unitsleft == 1) html_code+='selected="selected"';
+			html_code+='>on the left, for example $1.00</option>'+
+			'</select><br>';
+				if (q.unitname.length>0)
+					{
+					html_code += '<div class="choices"><table id="units"><tr><th>#</th><th>Unit</th><th>Multiplier</th><th></th></tr>';
+					for (var i=0; i<q.unitname.length;i++)
+						{
+						html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" size="5" id="unit'+(i+1)+'" value="'+q.unitname[i]+'"></td><td><input type="number" style="width: 2em;" id="multiplier'+(i+1)+'" value="'+q.multiplier[i]+'"></td><td class="choice_adddel"><button id="del_unit" class="del_btn" onclick="del_unit('+nr+','+i+'); show_numerical_question('+nr+');">x</button><button id="add_unit" class="add_btn" onclick="add_unit('+nr+','+i+'); show_numerical_question('+nr+');">+</button></td></tr>';
+						}
+						html_code+='</table></div><br>';
+					}
+		}
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+      /*install event handlers to dynamically store values in questionbank*/
+      $('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+    for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+            $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+            $('#tolerance'+(i+1)).on('input', function() {var cnr=this.id.substring("tolerance".length)-1; questionbank[nr].tolerance[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+    $('#qshowunits').on('change', function() {questionbank[nr].showunits=$(this).val();find_issues(nr);show_numerical_question(nr);});
+
+    if (q.showunits != 3) {
+        $('#qunitpenalty').on('input', function() {questionbank[nr].unitpenalty=$(this).val();find_issues(nr);});
+        $('#qunitgradingtype').on('change', function() {questionbank[nr].unitgradingtype=$(this).val();find_issues(nr);});
+        $('#qunitsleft').on('change', function() {questionbank[nr].unitsleft=$(this).val();find_issues(nr);});
+    }
+    if (q.unitname.length>0) {for (var i=0; i<q.unitname.length;i++) {
+        $('#unit'+(i+1)).on('input', function() {var cnr=this.id.substring("unit".length)-1; questionbank[nr].unitname[cnr]=$(this).val();find_issues(nr);});
+        $('#multiplier'+(i+1)).on('input', function() {var cnr=this.id.substring("multiplier".length)-1; questionbank[nr].multiplier[cnr]=$(this).val();find_issues(nr);});}
+    }
+
+}
+
+
+function show_shortanswer_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Shortanswer</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Short-Answer_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+    '<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+		'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+
+		'""><br><input type="checkbox" id="qcasesensitive" value="'+q.case_sensitive+'" ';
+		if (q.case_sensitive) html_code+="checked";
+		html_code += '> <label for="qcasesensitive">Case Sensitive</label> '+
+		'<div class="choices"><table><tr><th>#</th><th>Choices</th><th>Feedback</th><th>Value</th><th></th></tr>';
+		for (var i=0; i<q.choices.length;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" class="choice_text" id="choice'+(i+1)+'" value="'+q.choices[i]+'"></td><td><input type="text" class="choice_feedback" id="feedback'+(i+1)+'" value="'+q.feedback[i]+'"></td><td><input type="number" class="choice_value" id="value'+(i+1)+'" value="'+q.value[i]+'"></td><td class="choice_adddel"><button id="del_choice" class="del_btn" onclick="del_choice('+nr+','+i+'); show_shortanswer_question('+nr+');">x</button><button id="add_choice" class="add_btn" onclick="add_choice('+nr+','+i+'); show_shortanswer_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			        editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+/*install event handlers to dynamically store values in questionbank*/
+$('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	$('#qcasesensitive').change(function() {questionbank[nr].case_sensitive=$(this).prop('checked');find_issues(nr);});
+    for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+}
+
+function show_truefalse_question(nr) {
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>True/False</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/True/False_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+    '<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+		'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+
+		'""><br><div class="choices"><table><tr><th>#</th><th>Choices</th><th>Feedback</th><th>Value</th></tr>';
+		for (var i=0; i<q.choices.length;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" class="choice_text" id="choice'+(i+1)+'" value="'+q.choices[i]+'" readonly></td><td><input type="text" class="choice_feedback" id="feedback'+(i+1)+'" value="'+q.feedback[i]+'"></td><td><input type="number" class="choice_value" id="value'+(i+1)+'" value="'+q.value[i]+'"></td></tr>';
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+/*install event handlers to dynamically store values in questionbank*/
+$('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+
+}
+
+function show_essay_question(nr)
+{
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Essay-Question</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Essay_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+    '<label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			        editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+/*install event handlers to dynamically store values in questionbank*/
+$('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+}
+
+function show_description_question(nr)
+{
+tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Description</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Description_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">';
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+      /*install event handlers to dynamically store values in questionbank*/
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+}
+
+//inserts the cloze code for show_cloze_question()
+function build_cloze_code()
+{
+const max_choices=5;
+var code="{"+document.getElementById('cloze_points').value+":";
+switch (document.getElementById('cloze_type').value) {
+	case "multichoice_dropdown":
+		code+="MC"; if (document.getElementById('cloze_shuffle').checked) code +="S";
+		break;
+	case "multichoice_radio_vertical":
+		code+="MCV"; if (document.getElementById('cloze_shuffle').checked) code +="S";
+		break;
+	case "multichoice_radio_horizontal":
+		code+="MCH"; if (document.getElementById('cloze_shuffle').checked) code +="S";
+		break;
+	case "multichoice_checkboxes_vertical":
+		code+="MR"; if (document.getElementById('cloze_shuffle').checked) code +="S";
+		break;
+	case "multichoice_checkboxes_horizontal":
+		code+="MRH"; if (document.getElementById('cloze_shuffle').checked) code +="S";
+		break;
+	case "shortanswer":
+		code+="SA"; if (document.getElementById('cloze_case_sensitive').checked) code +="C";
+		break;
+	case "numerical":
+		code+="NM";
+		break;
+	}
+	code += ":";
+	for (var i=1; i<=max_choices;i++)
+	{
+		ch = document.getElementById('choice'+i).value;
+		fb = document.getElementById('feedback'+i).value;
+		val = document.getElementById('value'+i).value;
+		if (ch)
+			{
+				if (i>1) code += "~";
+				if (val !== "") code += "%"+val+"%";	//could also be a negative value like "-200"
+				code += ch;
+				if (fb) code += "#"+fb;
+			}
+	}
+	code+="}";
+	document.getElementById('cloze_preview_code').value = code;
+}
+
+function show_cloze_question(nr)
+{
+	const max_choices=5;
+	tinyMCE.execCommand('mceRemoveEditor', false, "qquestiontext"); tinyMCE.editors.length = 0;	//in case the user is too fast or the page loads to slowly, we'll remove any existing tinyMCE instances before creating a new one with the same ID
+$("#active_question").empty();	//clear any existing forms
+var q=questionbank[nr];
+var html_code='<center><h3>Cloze</h3></center>'+
+'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Embedded_Answers_(Cloze)_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<label for="qtags">Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">'+
+    '<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'"><br>'+
+	'Code: <input type="text" id="cloze_preview_code" size="45" readonly>&nbsp;<button id="insert_cloze_code" class="menu_btn" onclick="tinymce.activeEditor.execCommand(\'mceInsertContent\', false,document.getElementById(\'cloze_preview_code\').value);">Insert Code</button><br>'+
+	'<label for="cloze_type">Type:</label><select id="cloze_type" onchange="build_cloze_code();"><option value="multichoice_dropdown">Multiple Choice (Dropdown)</option><option value="multichoice_radio_vertical">Multiple Choice (vert. radiobuttons)</option><option value="multichoice_radio_horizontal">Multiple Choice (horiz. radiobuttons)</option><option value="multichoice_checkboxes_vertical">Multiple Choice (vert. checkboxes)</option><option value="multichoice_checkboxes_vertical">Multiple Choice (horiz. checkboxes)</option><option value="shortanswer">Short Answer</option><option value="numerical">Numerical</option></select>'+
+	'<label for="cloze_points">&nbsp;&nbsp;Points: </label> <input type="number" onclick="build_cloze_code();" id="cloze_points" size="3" value="1">'+
+	'<input type="checkbox" onclick="build_cloze_code();" id="cloze_case_sensitive"><label for="cloze_case_sensitive">Case sensitive (shortanswer)</label>&nbsp;&nbsp;'+
+	'<input id="cloze_shuffle" onclick="build_cloze_code();" type="checkbox"><label for="cloze_shuffle">Shuffle (multichoice)</label><br>'+
+	'<div class="choices"><table><tr><th>#</th><th>Choices</th><th>Feedback</th><th>Value</th><th</th></tr>';
+		for (var i=1; i<=max_choices;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+i+'</td><td><input type="text" onkeyup="build_cloze_code();" class="choice_text" id="choice'+i+'" value=""></td><td><input type="text" onkeyup="build_cloze_code();" class="choice_feedback" id="feedback'+i+'" value=""></td><td><input type="number" onkeyup="build_cloze_code();" size="5" id="value'+i+'" value=""></td></tr>';
+			}
+			html_code+='</table></div>';
+	
+	$("#active_question").append(html_code);	//insert the code into the document
+	//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+
+      /*install event handlers to dynamically store values in questionbank*/
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+    $('#qcasesensitive').change(function() {questionbank[nr].case_sensitive=$(this).prop('checked');find_issues(nr);});
+
+
+}
+
+//adds a marker in ddmarker-question q at choice position nr and adjusts the entries in drop_choice
+function add_marker(q, nr)
+{   for (var i=0; i<questionbank[q].drop_choice.length;i++)//we need to adjust all the entries in drop_choice
+	{
+		if (questionbank[q].drop_choice[i]>(nr+1)) questionbank[q].drop_choice[i]++;
+	}
+    questionbank[q].drag_text.splice(nr+1,0,"new marker");
+    questionbank[q].drag_noofdrags.splice(nr+1,0,"0");
+}
+
+//deletes the marker in ddmarker-question q at choice position nr and adjusts the entries in drop_choice
+function del_marker(q,nr)
+{   
+	if (questionbank[q].drag_text.length<2) return;
+	if ($.inArray((nr+1).toString(), questionbank[q].drop_choice)>-1) {alert_box("You can't delete a marker used in a drop zone.");return;}
+	for (var i=0; i<questionbank[q].drop_choice.length;i++)	//we need to adjust all the entries in drop_choice
+	{
+		if (questionbank[q].drop_choice[i]>(nr+1)) questionbank[q].drop_choice[i]--;
+	}
+    questionbank[q].drag_text.splice(nr,1);
+    questionbank[q].drag_noofdrags.splice(nr,1);
+}
+
+//adds a drop zone in ddmarker-question q at position nr
+function add_drop(q, nr)
+{   questionbank[q].drop_choice.splice(nr+1,0,"1");
+    questionbank[q].drop_coords.splice(nr+1,0,"0,0;10");
+	questionbank[q].drop_no.splice(nr+1,0,"0");
+	questionbank[q].drop_shape.splice(nr+1,0,"circle");
+}
+
+//deletes the drop zone in ddmarker-question q at choice position nr
+function del_drop(q,nr)
+{   
+	if (questionbank[q].drop_choice.length<2) return;
+	questionbank[q].drop_choice.splice(nr,1);
+    questionbank[q].drop_coords.splice(nr,1);
+	questionbank[q].drop_no.splice(nr,1);
+	questionbank[q].drop_shape.splice(nr,1);
+}
+
+//opens a file dialogue and loads the selected image into the current ddmarker-image canvas, replacing the current image. Also stores the image in the questionbank and draws the shapes.
+function load_ddmarker_image(nr, canvasname) {
+	var input = document.createElement('input');
+	input.type = 'file';
+	input.onchange = e => { 
+		var file = e.target.files[0];
+		var canvas = document.getElementById(canvasname);
+		ctx = canvas.getContext('2d');
+		var ddmarker_image = new Image();
+		ddmarker_image.onload = function() {
+			canvas.width = ddmarker_image.width; if (canvas.width>600) canvas.width=600;
+			canvas.height = ddmarker_image.height; if (canvas.height>400) canvas.width=400;
+			ctx.drawImage(ddmarker_image, 0, 0);
+			questionbank[nr].image_data = canvas.toDataURL("image/png").replace(/^data:image\/(png|jpg);base64,/, "");	//store the base64-data in the questionbank
+			questionbank[nr].image_name=file.name;
+			ddmarker_draw_shapes(nr, canvasname);
+		};
+		ddmarker_image.src= URL.createObjectURL(e.target.files[0]);
+	}
+	input.click();
+}
+
+//draws the shapes from ddmarker question nr onto canvas c
+function ddmarker_draw_shapes(nr, canvasname)
+{
+	var q=questionbank[nr];
+	var canvas = document.getElementById(canvasname);
+	var ctx = canvas.getContext("2d");
+
+		function drawStroked(text, x, y) {
+		ctx.font = '10px Sans-serif';
+		ctx.strokeStyle = 'black';
+		ctx.lineWidth = 3;
+		ctx.strokeText(text, x, y);
+		ctx.fillStyle = 'white';
+		ctx.fillText(text, x, y);
+		}
+	console.log("Drawing "+q.drop_shape.length+' shapes: '+q.drop_shape);
+	for (var i=0; i<q.drop_shape.length;i++)
+	{
+		switch (q.drop_shape[i].toLowerCase()){
+			case "circle":
+			var x=parseInt(q.drop_coords[i].substring(0, q.drop_coords[i].indexOf(",")));
+			var y=parseInt(q.drop_coords[i].substring(q.drop_coords[i].indexOf(",")+1,q.drop_coords[i].indexOf(";")));
+			var rad=parseInt(q.drop_coords[i].substring(q.drop_coords[i].indexOf(";")+1));
+			ctx.beginPath();
+			ctx.arc(x, y, rad, 0, 2 * Math.PI);
+			ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.fill();
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = '#ff0000';
+			ctx.stroke();
+			drawStroked(q.drag_text[q.drop_choice[i]], x+rad, y+rad);
+			break;
+		case "rectangle":
+			var x1=parseInt(q.drop_coords[i].substring(0, q.drop_coords[i].indexOf(",")));
+			var y1=parseInt(q.drop_coords[i].substring(q.drop_coords[i].indexOf(",")+1,q.drop_coords[i].indexOf(";")));
+			var x2=parseInt(q.drop_coords[i].substring(q.drop_coords[i].indexOf(";")+1,q.drop_coords[i].lastIndexOf(",")));
+			var y2=parseInt(q.drop_coords[i].substring(q.drop_coords[i].lastIndexOf(",")+1));
+			ctx.beginPath();
+			ctx.rect(x1,y1, x2, y2);
+			ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.fill();
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = '#ff0000';
+			ctx.stroke();
+			ctx.font = "10px Arial";
+			drawStroked(q.drag_text[q.drop_choice[i]], x1, y1);
+			break;
+		case "polygon":
+			var pos=q.drop_coords[i].split(";");
+			var x1=parseInt(pos[0].substring(0, pos[0].indexOf(",")));
+			var y1=parseInt(pos[0].substring(pos[0].indexOf(",")+1));
+			var x2=parseInt(pos[1].substring(0, pos[1].indexOf(",")));
+			var y2=parseInt(pos[1].substring(pos[1].indexOf(",")+1));
+			var x3=parseInt(pos[2].substring(0, pos[2].indexOf(",")));
+			var y3=parseInt(pos[2].substring(pos[2].indexOf(",")+1));
+			ctx.beginPath();
+			ctx.moveTo(x1,y1);
+			ctx.lineTo(x2, y2);
+  			ctx.lineTo(x3, y3);
+  			ctx.closePath();
+			ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+			ctx.fill();
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = '#ff0000';
+			ctx.stroke();
+			drawStroked(q.drag_text[q.drop_choice[i]], x1, y1);
+			break;
+		}
+	}
+}
+
+//inserts the image from ddmarker question "nr" in the questionbank into the canvas with the ID "canvasname" and calls ddmarker_draw_shapes to draw the shapes
+function insert_ddmarker_image(nr, canvasname)
+{
+	var q=questionbank[nr];
+var canvas = document.getElementById(canvasname);
+	ctx = canvas.getContext('2d');
+	var ddmarker_image = new Image();
+	ddmarker_image.onload = function() {
+		canvas.width = ddmarker_image.width; if (canvas.width>600) canvas.width=600;
+        canvas.height = ddmarker_image.height; if (canvas.height>400) canvas.width=400;
+  		ctx.drawImage(ddmarker_image, 0, 0);
+		ddmarker_draw_shapes(nr, canvasname);
+		};
+	ddmarker_image.src='data:image/png;base64,'+q.image_data;
+	}
+
+function show_ddmarker_question(nr)
+{
+	var shapes = ["circle", "polygon", "rectangle"];
+	console.log("Markers: "+questionbank[nr].drag_text);
+
+	$("#active_question").empty();	//clear any existing forms
+	var q=questionbank[nr];
+	var html_code='<center><h3>Drag and Drop Marker</h3></center>'+
+	'For more information on this question type, please consult <a href="https://docs.moodle.org/310/en/Drag_and_drop_markers_question_type" target="_blank">the official Moodle documentation.</a><br>'+
+	'<input type="text" id="qname" value="'+q.name+'"><br>'+
+	'<textarea id="qquestiontext"></textarea><br>'+
+	'<center><canvas id="ddmarker_canvas" style="border:3px solid black;"></canvas><br>'+
+	'Maximum: 600 x 400<br><button onclick="load_ddmarker_image('+nr+',\'ddmarker_canvas\')">Change image</button></center>'+
+	'<br><label for="qdefaultgrade">Default Grade: </label> <input type="number" id="qdefaultgrade" style="width:4em;" step="1" value="'+q.default_grade+'">'+
+	'<label for="qpenalty">&nbsp&nbspPenalty: </label> <input type="number" id="qpenalty" style="width:5em;" step="0.1" value="'+q.penalty+'">'+
+	'<label for="qtags">&nbsp;&nbsp;Tags: </label> <input id="qtags" class="question_tags" type="text" value="'+q.tags.join(',')+'">'+
+	'<br><input type="checkbox" id="qshuffleanswers" value="'+q.shuffle_answers+'" ';
+	if (q.shuffle_answers) html_code+="checked";
+	html_code +='> <label for="qshuffleanswers">Shuffle Answers</label>'+
+	'<br><br><b>Markers</b><br><div class="choices"><table><tr><th>#</th><th>Text</th><th>Number<br>(0=infinite)</th><th></th></tr>';
+		for (var i=0; i<q.drag_text.length;i++)
+			{
+			html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><input type="text" class="choice_text" id="drag_text'+(i+1)+'" value="'+q.drag_text[i]+'"></td><td><input type="number" class="choice_value" id="drag_noofdrags'+(i+1)+'" value="'+q.drag_noofdrags[i]+'"></td><td class="choice_adddel"><button id="del_marker" class="del_btn" onclick="del_marker('+nr+','+i+'); show_ddmarker_question('+nr+');">x</button><button id="add_marker" class="add_btn" onclick="add_marker('+nr+','+i+'); show_ddmarker_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div>'+
+			'<br><b>Drop Zones</b><br><div class="choices"><table><tr><th>#</th><th>Shape</th><th>Marker</th><th>Coordinates</th><th></th></tr>';
+		for (var i=0; i<q.drop_shape.length;i++)
+			{
+				html_code+='<tr><td class="choice_nr">'+(i+1)+'</td><td><select id="drop_shape'+(i+1)+'"><option ';
+				if (q.drop_shape[i].toLowerCase()=="circle") html_code+='selected="selected"';
+				html_code += '>Circle</option><option ';
+				if (q.drop_shape[i].toLowerCase()=="polygon") html_code+='selected="selected"';
+				html_code +='>Polygon</option><option ';
+				if (q.drop_shape[i].toLowerCase()=="rectangle") html_code+='selected="selected"';
+				html_code += '>Rectangle</option></select></td><td>';
+				html_code += '<select id="drop_choice'+(i+1)+'">';
+				for (var k=0; k<q.drag_text.length;k++)
+				{
+					html_code +='<option value="'+k+'"';
+					if (q.drop_choice[i]==k) html_code+=' selected="selected"';
+					html_code += '>'+q.drag_text[k]+'</option>';
+				}
+				html_code +='</select></td><td><input type="text" style="width:150px;" id="drop_coords'+(i+1)+'" value="'+q.drop_coords[i]+'"></td><td class="choice_adddel"><button id="del_drop" class="del_btn" onclick="del_drop('+nr+','+i+'); show_ddmarker_question('+nr+');">x</button><button id="del_drop" class="add_btn" onclick="add_drop('+nr+','+i+'); show_ddmarker_question('+nr+');">+</button></td></tr>';
+			}
+			html_code+='</table></div>';
+	$("#active_question").append(html_code);	//insert the code into the document
+
+		//initialize tinyMCE
+tinymce.init({
+        selector: '#qquestiontext',
+		width: 700,
+		menubar: false,
+		statusbar: true,
+		resize:true,
+		toolbar_mode: 'floating',
+		plugins: [
+  	    'advlist autolink link lists charmap hr anchor image',
+  	    'searchreplace wordcount visualblocks visualchars code fullscreen insertdatetime nonbreaking',
+  	    'table directionality template paste'
+  	  ],
+	  paste_data_images: true,
+		toolbar: 'undo redo | formatselect | table | ' +
+				'bold italic underline  forecolor backcolor | alignleft aligncenter ' +
+				'alignright alignjustify | bullist numlist outdent indent | image code | ' +
+				'removeformat',
+				setup: function(editor) {			
+                    editor.on('blur', function(e) {questionbank[nr].question_text=tinymce.get("qquestiontext").getContent();find_issues(nr);});
+			editor.on('init', function (e) {
+              editor.setContent(q.question_text);	//insert the question text into the textarea
+          });
+		}
+      });
+	
+	  	//insert the image into the canvas and draw the shapes
+	insert_ddmarker_image(nr, "ddmarker_canvas");
+
+    /*install event handlers to dynamically store values in questionbank*/
+    $('#qdefaultgrade').on('input', function() {questionbank[nr].default_grade=$(this).val();find_issues(nr);
+        if (questionbank[nr].default_grade <1) $(this).addClass('warning'); else $(this).removeClass('warning');    //if the grade is below 1, we'll issue a warning
+    });
+	$('#qpenalty').on('input', function() {questionbank[nr].penalty=$(this).val();find_issues(nr);});
+    $('#qtags').on('input', function() {questionbank[nr].tags=$(this).val().split(',');find_issues(nr);});
+    $('#qname').on('input', function() {questionbank[nr].name=$(this).val();find_issues(nr);});
+	$('#qshuffleanswers').change(function() {questionbank[nr].shuffle_answers=$(this).prop('checked');find_issues(nr);});
+    for (var i=0; i<q.choices.length;i++)
+			{
+            //add the event handlers for all input fields in the table
+            $('#choice'+(i+1)).on('input', function() {var cnr=this.id.substring("choice".length)-1; questionbank[nr].choices[cnr]=$(this).val();find_issues(nr);});
+		    $('#feedback'+(i+1)).on('input', function() {var cnr=this.id.substring("feedback".length)-1; questionbank[nr].feedback[cnr]=$(this).val();find_issues(nr);});
+		    $('#value'+(i+1)).on('input', function() {var cnr=this.id.substring("value".length)-1; questionbank[nr].value[cnr]=$(this).val();find_issues(nr);});
+			}
+
+
+    
+		//we have to check if the first drag_text input element exists. Due to the image, the question may not have finished loading yet. If the element doesn't exist, the question hasn't loaded yet and we break.
+		for (var i=0; i<q.drag_text.length;i++)
+			{
+				$('#drag_text'+(i+1)).on('input', function() {var cnr=this.id.substring("drag_text".length)-1; questionbank[nr].drag_text[cnr]=$(this).val();questionbank[nr].drag_no[cnr]=i+1;find_issues(nr);show_ddmarker_question(nr);});
+				$('#drag_noofdrags'+(i+1)).on('input', function() {var cnr=this.id.substring("drag_noofdrags".length)-1; questionbank[nr].drag_noofdrags[cnr]=$(this).val();find_issues(nr);});
+			}
+		
+		for (var i=0; i<q.drop_choice.length;i++)
+			{
+                $('#drop_choice'+(i+1)).on('input', function() {var cnr=this.id.substring("drop_choice".length)-1; questionbank[nr].drop_choice[cnr]=$(this).val();questionbank[nr].drop_no[cnr]=i+1;find_issues(nr);insert_ddmarker_image(nr, 'ddmarker_canvas');});
+                $('#drop_shape'+(i+1)).on('change', function() {
+                    var cnr=this.id.substring("drop_shape".length)-1;
+                    questionbank[nr].drop_shape[cnr]=$(this).val();
+                    find_issues(nr);
+                    //when the user changes a shape, let's add some default coordinates
+                    	switch ($(this).val().toLowerCase()) {
+	                   		case "circle": $("#drop_coords"+(cnr+1)).val("10,10;20"); break;
+                    		case "rectangle":$("#drop_coords"+(cnr+1)).val("10,10;50,50");break;
+		                    case "polygon":$("#drop_coords"+(cnr+1)).val("10,10;50,50;100,10");break;
+                        }
+                        questionbank[nr].drop_coords[cnr]=$("#drop_coords"+(cnr+1)).val();
+                    insert_ddmarker_image(nr, 'ddmarker_canvas');
+                });
+                $('#drop_coords'+(i+1)).on('input', function() {var cnr=this.id.substring("drop_coords".length)-1; questionbank[nr].drop_coords[cnr]=$(this).val();find_issues(nr);insert_ddmarker_image(nr, 'ddmarker_canvas');});
+			}
+}
+
+function rename_category()
+{
+var newname=$("#qname").val();
+var oldname=$("#ren_btn").val();
+if (oldname.indexOf("/")>-1)
+		newname=oldname.substring(0, oldname.lastIndexOf("/"))+"/"+newname;
+for (var i=0; i<questionbank.length; i++)
+	{
+		if (questionbank[i].category.startsWith(oldname)) 
+			{
+				questionbank[i].category=questionbank[i].category.replace(oldname, newname);
+			}
+	}
+display_questionbank();
+$.ui.fancytree.getTree("#tree").activateKey(current_question);
+}
+
+function edit_category(name)
+{
+	$("#active_question").empty();	//clear any existing forms
+	var html_code='<center><h3>Edit Category</h3></center>'+
+	'<input type="text" id="qname" value="'+name.substring(name.lastIndexOf("/")+1)+'"><button id="ren_btn" onclick="rename_category()" value="'+name+'">OK</button>';
+	$("#active_question").append(html_code);	//insert the code into the document
+}
+
+function show_no_question_selected()
+{
+	$("#active_question").empty();	//clear any existing forms
+	var html_code='<span style="margin: 0; position: absolute; top: 50%; left:10%;">'+
+		'<h3>Please select a question or category from the question bank to edit it here.</h3></span>';
+	$("#active_question").append(html_code);	//insert the code into the document
+}
+
+function show_unsupported_question_type(nr) {
+	$("#active_question").empty();	//clear any existing forms
+	var html_code='<center><h3>Unsupported Question Type</h3></center>';
+	$("#active_question").append(html_code);	//insert the code into the document
+}
+
+//################## fancytree setup start ######################
+$(function(){
+	// Initialize the tree inside the <div>element.
+	// The tree structure is read from the contained <ul> tag.
+	$("#tree").fancytree({
+		checkbox: true,
+		selectMode: 3,
+		activeVisible: true,
+		focusOnSelect: true,
+		activate: function(event, data){
+			  // A node was activated: display all information of this question
+			  var node = data.node;
+			  current_question=node.key;	//save the number of the selected question in this global variable
+			  update_footer();
+			  if (node.folder) {edit_category(node.getPath());return;}
+			  cleanup(node.key);
+			  switch (questionbank[node.key].type)
+			  {
+			  case "multichoice":{show_multichoice_question(node.key); break;}
+			  case "shortanswer":{show_shortanswer_question(node.key); break;}
+			  case "numerical":{show_numerical_question(node.key); break;}
+			  case "matching":{show_matching_question(node.key); break;}
+			  case "truefalse":{show_truefalse_question(node.key); break;}
+			  case "essay":{show_essay_question(node.key); break;}
+			  case "description":{show_description_question(node.key); break;}
+			  case "cloze":{show_cloze_question(node.key);break;}
+			  case "ddwtos":{show_ddwtos_question(node.key);break;}
+			  case "ddmarker":{show_ddmarker_question(node.key);break;}
+			  default: {show_unsupported_question_type(node.key);break;}
+			  }		  
+		},
+		deactivate: function(event, data) {
+		},
+		select: function(event, data) {
+			update_footer();
+		},
+		focus: function(event, data) {
+		},
+		blur: function(event, data) {
+		},
+		lazyLoad: function(event, data){
+			// Simulate a slow Ajax request
+			var dfd = new $.Deferred();
+			data.result = dfd.promise();
+			window.setTimeout(function(){
+				dfd.resolve([
+					{ title: "Lazy node 1", lazy: true },
+					{ title: "Simple node 2", select: true }
+				]);
+			}, 1500);
+		}
+	});
+});
+
+//##########end fancytree setup ################
+
+// Chops the selected text from the sandbox into paragraphs and returns them in a string array. 
+function get_selected_paragraphs(){
+var textArea = document.getElementById("sandbox");
+var text =textArea.value;
+var indexStart=textArea.selectionStart;
+var indexEnd=textArea.selectionEnd;
+var rawtext=text.substring(indexStart, indexEnd);
+if (rawtext=="") {alert("Please select some text."); return "";}
+var paragraphs = rawtext
+   .replace(/\n\r/g, "\n")
+   .replace(/\r/g, "\n")
+   .split(/\n{2,}/g);
+   return paragraphs;
+}
+
+
+
+function text2multichoice(){
+	var paragraphs = get_selected_paragraphs();
+	const letters="abcdefghijklmnopqrstuvwxyz";
+	var insert_position=current_question;
+
+	if (paragraphs=="") return;
+
+	var correct_ind = $("#import_correct_answer_indicator").val();	//if the correct answer is preceded by these characters
+	var correct_num = $("#import_correct_answer_number").val();	//if the correct answer is always answer number x
+	var correct_last = $("#import_correct_answer_lastline").prop('checked');	//if the correct answer is at the end of the last choice (i.e. the choice is not really a choice)
+
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+
+		question.type="multichoice";
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		question.tags=$("#import_question_tags").val().split(",");
+		question.numbering=$("#import_question_numbering").val();
+		question.single_answer=$("#import_question_single_answer").prop('checked');
+		question.shuffle_answers=$("#import_question_shuffle").prop('checked');
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		for (i=1;i<question_lines.length;i++) //assume that the next lines are the choices
+			{
+			question.choices[i-1]=question_lines[i];
+			question.feedback[i-1]="";
+			question.value[i-1]=0;
+			if (correct_ind != "") 
+			{
+				if (question.choices[i-1].indexOf(correct_ind) == 0)
+					{
+						question.value[i-1]="100";
+						question.choices[i-1] = question.choices[i-1].substring(correct_ind.length);
+					}
+			}
+			else
+			{
+				if (correct_num>0 && correct_num == i) question.value[i-1] = "100";
+			}
+			}
+		console.log(correct_last);
+		if (correct_last)	//if the correct answer is at the end of the last choice
+			{
+				var c=question.choices[question.choices.length-1];	//get the last choice
+				var answer=c.slice(-1).toLowerCase();
+				var answer_nr=letters.indexOf(answer);
+				console.log(c+"-"+answer+"-"+answer_nr);
+				if (answer_nr>-1 && answer_nr<=question.choices.length) question.value[answer_nr] ="100";	//set the correct value to 100%
+				question.choices.length--; //delete the last choice
+				question.feedback.length--;
+				question.value.length--;
+			}
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	show_question(insert_position);
+	alert_box(paragraphs.length+" Multiple Choice-question(s) added!")
+	}
+
+	function text2matching(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+
+	if (paragraphs=="") return;
+
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[],
+		"subquestion_text":[],
+		"subquestion_answer":[]
+		};
+		var delimiter=$("#import_matching_delimiter").val();
+
+		question.type="matching";
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		question.tags=$("#import_question_tags").val().split(",");
+		question.shuffle_answers=$("#import_question_shuffle").prop('checked');
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		for (i=1;i<question_lines.length;i++) //assume that the next lines are the choices
+			{
+			var delpos = question_lines[i].indexOf(delimiter);
+			question.subquestion_text[i-1]=question_lines[i].substring(0,delpos);
+			question.subquestion_answer[i-1]=question_lines[i].substring(delpos+delimiter.length);
+			} 
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	show_question(insert_position);
+	alert_box(paragraphs.length+" Matching-question(s) added!")
+	}
+
+	function text2ddwtos(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+
+	if (paragraphs=="") return;
+
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+		
+		question.type="ddwtos";
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		question.tags=$("#import_question_tags").val().split(",");
+		question.shuffle_answers=$("#import_question_shuffle").prop('checked');
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		for (var i=1;i<question_lines.length;i++) //assume that the next lines are the choices
+			{
+			question.choices[i-1]=question_lines[i];
+			question.value[i-1]=1;	//let's assign all choices to group 1 for now
+			} 
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(insert_position);
+	alert_box(paragraphs.length+" Drag and Drop into Text-question(s) added!")
+	}
+
+	function text2truefalse(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	var correct_word=$("#import_correct_answer_word").val();
+	if (correct_word =="") correct_word = "true";
+	if (paragraphs=="") return;
+
+	for (q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+		question.type="truefalse";
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="1";
+		question.tags=$("#import_question_tags").val().split(",");
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		
+		question.choices.push("true");	//the first one is always "true", the second one always "false"
+		question.choices.push("false");
+		question.feedback.push("");question.feedback.push("");
+		if (question_lines[1].toLowerCase().indexOf(correct_word.toLowerCase()) > -1)
+			{
+				question.value.push("100");
+				question.value.push("0");
+			}
+			else
+			{
+				question.value.push("0");
+				question.value.push("100");
+			}
+		 
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(insert_position);
+	alert_box(paragraphs.length+" TrueFalse-question(s) added!")
+	}
+
+function text2shortanswer(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	var delimiter = $("#import_question_embedded_answer_delimiters").val();
+
+	if (paragraphs=="") return;
+
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"type":"shortanswer",
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		}
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		question.case_sensitive=$("#import_question_case_sensitive").prop('checked');
+		question.tags=$("#import_question_tags").val().split(",");
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));	
+		if (delimiter != "" && delimiter.length == 3)
+			{
+				var start=delimiter.substring(0,1);
+				var sep=delimiter.substring(1,2);
+				var end=delimiter.substring(2,3);
+				var c=question.question_text.substring(question.question_text.lastIndexOf(start)+1, question.question_text.lastIndexOf(end));
+				var dum=c.split(sep);
+				if (dum.length==0) {alert_box("Shortanswer import: Error converting embedded questions in question #"+q); break;}
+				question.choices=dum;
+				for (var i=0; i<question.choices.length; i++)
+					{question.feedback[i]="";question.value[i]="0";}
+			}
+			else
+		for (var i=1;i<question_lines.length;i++) //assume that the next lines are the choices
+			{
+			question.choices[i-1]=question_lines[i];
+			question.feedback[i-1]="";
+			question.value[i-1]="0";
+			} 
+			if (question_lines.length==2) question.value[0]="100";
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	show_question(insert_position);
+	alert_box(paragraphs.length+" Shortanswer question(s) added!")
+	}
+
+	function text2numerical(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	if (paragraphs=="") return;
+
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {
+		"type":"numerical",
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[],
+		"tolerance":[],		
+		"unitgradingtype":3,
+		"unitpenalty":"0.1000000",
+		"showunits":0,
+		"unitsleft":0,
+		"unitname":[],
+		"multiplier":[1]
+		};
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		//question.case_sensitive=$("#import_question_case_sensitive").prop('checked');
+		question.tags=$("#import_question_tags").val().split(",");
+		question_lines=paragraphs[q].split("\n");
+		question.question_text=question_lines[0]; //assuming that the first line in each paragraph is the question text
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		for (var i=1;i<question_lines.length;i++) //assume that the next lines are the choices
+			{
+			question.choices[i-1]=question_lines[i];
+			question.feedback[i-1]="";
+			question.value[i-1]=0;
+			} 
+			question.value[0]=100;
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	show_question(insert_position);
+	alert_box(paragraphs.length+" Numerical question(s) added!")
+	}
+
+
+	function text2essay(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	if (paragraphs=="") return;
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {		
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+		question.type="essay";
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));	
+		question.category=questionbank[insert_position].category;
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="")question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="")question.penalty="0.3333";
+		question.tags=$("#import_question_tags").val().split(",");
+		question.question_text=paragraphs[q]; //assuming that the first line in each paragraph is the question text
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(insert_position);
+	alert_box(paragraphs.length+" Essay question(s) added!")
+
+	}
+
+	function text2description(){
+	var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	if (paragraphs=="") return;
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {		
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+		question.type="description";
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));
+		question.tags=$("#import_question_tags").val().split(",");
+		question.category=questionbank[insert_position].category;
+		question.category=questionbank[insert_position].category;
+		question.default_grade=$("#import_question_default_points").val();if (question.default_grade=="") question.default_grade="1";
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="") question.penalty="0.3333";
+		question.tags=$("#import_question_tags").val().split(",");
+		question.question_text=paragraphs[q]; //assuming that the first line in each paragraph is the question text
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(insert_position);
+	alert_box(paragraphs.length+" Essay question(s) added!")
+
+	}
+
+	function text2cloze(){
+		var paragraphs = get_selected_paragraphs();
+	var insert_position=current_question;
+	if (paragraphs=="") return;
+	for (var q=0; q<paragraphs.length; q++)
+	{
+		var question = {		
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+		question.type="cloze";
+		question.name=$("#import_question_name").val().replace(/#/g, (q+1));	
+		question.category=questionbank[insert_position].category;
+		question.category=questionbank[insert_position].category;
+		question.tags=$("#import_question_tags").val().split(",");
+		question.penalty=$("#import_question_default_penalty").val(); if (question.penalty=="") question.penalty="0.3333";
+		question.question_text=paragraphs[q]; //assuming that the first line in each paragraph is the question text
+		questionbank.splice(insert_position+q, 0, question); //store the question in the questionbank
+		}
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(insert_position);
+	alert_box(paragraphs.length+" Cloze question(s) added!")
+
+	}
+
+    //gets the position of a dummy category in the question bank. Returns -1, if the category was not found
+function get_dumcat_key(cat)
+{
+    for (var k=0;k<questionbank.length;k++) {if (questionbank[k].type =="category" && questionbank[k].category == cat) {return(k);}            }
+    return(-1);
+}
+    
+function update_question_categories()
+{
+question_categories.length=0;
+for (var i=0; i<questionbank.length; i++)
+	{
+	if (question_categories.indexOf(questionbank[i].category) == -1) question_categories.push(questionbank[i].category);
+	}
+}
+
+//The main function which updates and displays the entire question bank
+function display_questionbank(){
+var icon ="fancytree/img/icon-multichoice.png";
+var Node = $.ui.fancytree.getTree("#tree").getRootNode();
+show_no_question_selected();
+
+update_question_categories();
+find_all_issues();
+update_footer();
+
+Node.removeChildren();	//reset the tree before creating it, otherwise new nodes will be added to the end of the tree
+
+for (var i=0; i<question_categories.length; i++)	//let's create the categories first
+	{
+	var myNodes = $.ui.fancytree.getTree("#tree").getRootNode();	//all nodes so far
+		var cats = question_categories[i].split("/");
+		var dum_cat="";
+        var dum_cat_key="";
+		for (var c=0; c<cats.length; c++)
+			{				
+			if (dum_cat=="") dum_cat=cats[c]; else dum_cat+="/"+cats[c];
+            dum_cat_key = get_dumcat_key(dum_cat);
+			if (dum_cat_key == -1) {console.log("Category "+dum_cat+" not found.");continue;}	//this should never happen
+			var already_existing_node = $.ui.fancytree.getTree("#tree").getNodeByKey(dum_cat_key);  //check if the key of this category already exists in the tree
+			if (already_existing_node)	//if this category already exists in the tree
+			{
+				myNodes = already_existing_node;	//...climb the tree one level
+			}
+			else
+			{
+                myNodes = myNodes.addChildren({	//if the node doesn't exist, we add it
+						title: cats[c],
+						icon: "fancytree/img/category.png",
+						folder: true,
+                        key:dum_cat_key
+						});
+												//and then we add all the questions from that category
+				for(var q=0; q<questionbank.length; q++) {
+					if (questionbank[q].category==myNodes.getPath() && questionbank[q].type != "category")
+					{
+                        icon="fancytree/img/icon-"+questionbank[q].type+".png";	//find the correct icon
+                        if (questionbank[q].issue == "") 
+                        {
+                            txt = questionbank[q].name;
+                            ttp = questionbank[q].question_text;
+                        }
+                        else
+                        {
+                            txt = '<span style="color: #FF0000">!! </span>'+questionbank[q].name;
+                            ttp = questionbank[q].issue;
+                        }
+                        var childNode = myNodes.addChildren({
+                        title: txt,
+                        tooltip: ttp,
+                        icon: icon,
+                        key: q.toString()
+                        });
+					}	
+				  }										
+			}
+		}
+	}
+}
+
+function show_sidebar(yes)
+{
+	if (yes)
+	{
+		document.getElementById("sidebar_wrapper").style.width = "calc(100% - 45% - 25%)";
+  		document.getElementById("main").style.marginLeft = "calc(100% - 45% - 25%)";
+	}
+	else 
+	{
+		document.getElementById("sidebar_wrapper").style.width = "0";
+  		document.getElementById("main").style.marginLeft = "0";
+		$("#sidebar_wrapper").empty();
+	}
+	sidebar_visible=yes;
+}
+
+
+function alert_box(text)
+{
+	$( "#alert-box").html(text);
+	$( "#alert-box").fadeIn( 300 ).delay( 1500 ).fadeOut( 400 );
+}
+
+// Function to download data to a file
+function download(data, filename, type) {
+    var file = new Blob([data], {type: type});
+    if (window.navigator.msSaveOrOpenBlob) // IE10+
+        window.navigator.msSaveOrOpenBlob(file, filename);
+    else { // Others
+        var a = document.createElement("a"),
+                url = URL.createObjectURL(file);
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);  
+        }, 0); 
+    }
+}
+
+function save_file(only_selected)
+{
+	var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	var counter = 0;
+	current_file_dum=prompt("Please enter the file name", current_file.split(".")[0]);
+	if (!current_file_dum) return;
+	if (current_file_dum=="") current_file="default.xml"; else current_file=current_file_dum+".xml";
+	var cat="";
+	var xml='<?xml version="1.0" encoding="UTF-8"?>\n'+
+	'<quiz>\n';
+	
+	if (only_selected) len = all_checked.length; else len = questionbank.length;	//depending on only_selected, we'll either traverse the entire questionbank or only the selected questions
+	alert_box("Saving "+len+" questions");
+	for (var i=0;i<len; i++)
+	{
+		if (only_selected) nr = all_checked[i].key; else nr = i;	//determining which question comes next
+		var q=questionbank[nr];
+        if (q.type == "category") continue;	//if this is a category, we'll skip it, since we have stored the category with each question.
+		counter++;
+		if (q.category != cat)
+		{
+			xml+='<question type="category">\n<category>\n<text>'+q.category+'</text>\n</category>\n</question>';
+			cat=q.category;
+		}
+		xml+='<question type="'+q.type+'">\n'+
+		'<name>\n<text>'+q.name+'</text>\n</name>\n'+
+		'<questiontext format="html">\n<text><';
+		xml+='![CDATA['+q.question_text+']]';
+		xml+='></text>\n</questiontext>\n'+
+		'<generalfeedback format="html">\n'+
+		'<text></text>\n</generalfeedback>\n';
+		switch (q.type)
+		{
+			case "truefalse": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format = "html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format = "html"><text></text></incorrectfeedback>\n'+
+					'<answer fraction = "'+q.value[0]+'" format = "html">\n<text>true</text>\n<feedback format = "html">\n<text><![CDATA['+q.feedback[0]+']]></text>\n</feedback>\n</answer>\n'+
+					'<answer fraction = "'+q.value[1]+'" format = "html">\n<text>false</text>\n<feedback format = "html">\n<text><![CDATA['+q.feedback[1]+']]></text>\n</feedback>\n</answer>\n';
+				break;}
+			case "multichoice": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n'+
+					'<single>'+q.single_answer+'</single>\n'+
+					'<shuffleanswers>'+(q.shuffle_answers ? '1' : '0')+'</shuffleanswers>\n'+
+					'<answernumbering>'+answer_numbering[q.numbering]+'</answernumbering>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format = "html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format = "html"><text></text></incorrectfeedback>\n';
+					for (var c=0;c<q.choices.length;c++)
+					{
+						xml+='<answer fraction = "'+q.value[c]+'" format = "html">\n<text><![CDATA['+q.choices[c]+']]>\n</text>\n'+
+							'<feedback format = "html">\n<text><![CDATA['+q.feedback[c]+']]></text>\n'+
+							'</feedback>\n</answer>\n';
+					}
+				break;}
+
+				case "matching": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n'+
+					'<shuffleanswers>'+q.shuffle_answers+'</shuffleanswers>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format="html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format="html"><text></text></incorrectfeedback>\n';
+					for (var c=0;c<q.subquestion_text.length;c++)
+					{
+						xml+='<subquestion format="html">\n<text>'+q.subquestion_text[c]+'</text>\n<answer>\n<text>'+q.subquestion_answer[c]+'</text>\n</answer>\n</subquestion>';
+					}
+				break;}
+			case "numerical": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format="html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format="html"><text></text></incorrectfeedback>\n';
+					for (var c=0;c<q.choices.length;c++)
+					{
+						xml+='<answer fraction = "'+q.value[c]+'" format = "html">\n<text><![CDATA['+q.choices[c]+']]>\n</text>\n'+
+							'<feedback format = "html">\n<text><![CDATA['+q.feedback[c]+']]></text>\n'+
+							'</feedback>\n'+
+							'<tolerance>'+q.tolerance+'</tolerance>\n</answer>\n';
+					}
+					if (q.unitname.length>0)
+						{
+							xml += "<units>\n";
+							for (var c=0;c<q.unitname.length;c++)
+							{
+								xml+='<unit>\n<multiplier>'+q.multiplier+'</multiplier>\n<unit_name>'+q.unitname+'</unit_name>\n</unit>';
+							}
+						xml += "</units>\n";
+						}
+					xml +='<unitgradingtype>'+q.unitgradingtype+'</unitgradingtype>\n'+
+					      '<unitpenalty>'+q.unitpenalty+'</unitpenalty>\n'+
+						  '<showunits>'+q.showunits+'</showunits>\n'+
+						  '<unitsleft>'+q.unitsleft+'</unitsleft>\n';
+				break;}
+			case "shortanswer": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n';'<usecase>'+q.case_sensitive+'</usecase>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format = "html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format = "html"><text></text></incorrectfeedback>\n';
+					for (var c=0;c<q.choices.length;c++)
+					{
+						xml+='<answer fraction = "'+q.value[c]+'" format = "html">\n<text><![CDATA['+q.choices[c]+']]>\n</text>\n'+
+							'<feedback format = "html">\n<text ><![CDATA['+q.feedback[c]+']]></text>\n'+
+							'</feedback>\n</answer>\n';
+					}
+				break;}
+			case "essay": {
+					xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format = "html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format = "html"><text></text></incorrectfeedback>\n';
+				break;}
+			case "ddwtos": {
+				xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n'+
+					'<single>'+q.single_answer+'</single>\n'+
+					'<shuffleanswers>'+q.shuffle_answers+'</shuffleanswers>\n'+
+					'<correctfeedback format="html"><text></text></correctfeedback>\n'+
+					'<partiallycorrectfeedback format = "html"><text></text></partiallycorrectfeedback>\n'+
+					'<incorrectfeedback format = "html"><text></text></incorrectfeedback>\n';
+					for (var c=0;c<q.choices.length;c++)
+					{
+						xml+='<dragbox>\n<text>'+q.choices[c]+'\n</text>\n'+
+							'<group>'+q.value[c]+'</group>\n</dragbox>\n';
+					}
+				break;}
+			case "cloze": {
+				xml+='<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n';
+					break;
+			}
+			case "description": {
+				break;}
+			case "ddmarker": {
+					xml+='<defaultgrade>'+q.default_grade+'</defaultgrade>\n'+
+					'<penalty>'+q.penalty+'</penalty>\n'+
+					'<hidden> 0 </hidden>\n';
+					if (q.shuffle_answers) xml += '<shuffleanswers/>\n';
+					xml += '<correctfeedback format="html">\n<text><![CDATA[<p>Your answer is correct.</p>]]></text>\n</correctfeedback>\n<partiallycorrectfeedback format="html">\n<text><![CDATA[<p>Your answer is partially correct.</p>]]></text>\n</partiallycorrectfeedback>\n<incorrectfeedback format="html">\n<text><![CDATA[<p>Your answer is incorrect.</p>]]></text>\n</incorrectfeedback>\<shownumcorrect/>'+
+					'<file name="'+q.image_name+'" encoding="base64">'+q.image_data+'</file>\n';
+					for (var i=0; i<q.drag_text.length;i++)	xml+='<drag>\n<no>'+q.drag_no[i]+'</no>\n<text>'+q.drag_text[i]+'</text>\n<noofdrags>'+q.drag_noofdrags[i]+'</noofdrags>\n</drag>\n';
+					for (var i=0;i<q.drop_shape.length;i++) xml += '<drop>\n<no>'+q.drop_no[i]+'</no>\n<shape>'+q.drop_shape[i]+'</shape>\n<coords>'+q.drop_coords[i]+'</coords>\n<choice>'+q.drop_choice[i]+'</choice>\n</drop>\n';
+					break;
+					}
+		}
+		if (q.tags[0] != "")
+			{
+			xml+="<tags>\n";
+			for (var tagnr=0;tagnr<q.tags.length;tagnr++)
+				{
+				xml+="<tag><text>"+q.tags[tagnr]+"</text></tag>\n";
+				}
+			xml+="</tags>\n";
+			}
+		xml+='</question>\n';
+	}
+	xml+='</quiz>';
+	download(xml, current_file, "text");
+	alert_box("Downloaded file contains "+counter+" questions");
+}
+
+//initialize everything on load
+$(function () {
+	show_sandbox();
+	show_no_question_selected();
+	new_file();
+});
+
+function bulk_import()
+{
+	if (current_question==-1)
+	{
+		alert_box("Select a spot in the questionbank first.");
+		return;
+	}
+	switch ($("#select_questiontype").val())
+	{
+		case "multichoice":{text2multichoice();break;}
+		case "shortanswer":{text2shortanswer();break;}
+		case "numerical":{text2numerical();break;}
+		case "truefalse":{text2truefalse();break;}
+		case "essay":{text2essay();break;}
+		case "cloze":{text2cloze();break;}
+		case "description":{text2description();break;}
+		case "ddwtos":{text2ddwtos();break;}
+		case "matching":{text2matching();break;}
+
+	}
+}
+
+//cleans up questions by removing empty choices
+function cleanup(nr)
+{
+switch (questionbank[nr].type)
+	{
+		case "multichoice":
+		case "shortanswer":{
+			for (var i=questionbank[nr].choices.length-1;i>0;i--)		//delete all the empty choices
+			{
+				if (questionbank[nr].choices[i] == null || strip_html(questionbank[nr].choices[i], 1) == "") 
+				{
+					questionbank[nr].choices.splice(i,1);
+					questionbank[nr].feedback.splice(i,1);
+					questionbank[nr].value.splice(i,1);
+				}
+			}
+			if (questionbank[nr].choices.length < 1) {
+				questionbank[nr].choices.splice(i,1, "Please enter a choice here");
+				questionbank[nr].feedback.splice(i,1, "");
+				questionbank[nr].value.splice(i,1, "100");
+				}
+			break;
+		}
+	}
+}
+
+//deletes all the selected questions
+function delete_questions()
+{
+	var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	if (all_checked.length == 0) return;
+    var sorted_array=[];
+    for (var i=0; i<all_checked.length;i++) sorted_array.push(parseInt(all_checked[i].key));
+    sorted_array.sort(function(a, b){return a-b});
+	if (!confirm("Are you sure you want to delete the "+all_checked.length+" selected questions and categories?")) return;
+	for (var i=sorted_array.length-1; i>=0; i--)		//we have to do this backwards, otherwise delected questions would influence the numbering of the questionbank and cause problems
+	{
+    	questionbank.splice(sorted_array[i],1);	//delete the question or dummy category question.
+	}
+	if (questionbank.length==0) new_file();
+	display_questionbank();
+	current_question = all_checked[0]-1;
+    if (current_question<0) current_question=0;
+	show_question(current_question);
+}
+
+function new_category(cat_name)		//simply creates a new dummy question of the type "category"
+{
+	var question = {
+		"choices": [],
+		"feedback":[],
+		"value":[],
+		"tags":[]
+		};
+
+	var node = $("#tree").fancytree("getActiveNode");
+	if (!node) {alert_box("Please select a question or category first."); return;}
+	question.type="category";
+	if (!cat_name)
+		{
+		cat_name=prompt("Please enter a name for the new category");
+		if (!cat_name) return;
+		}
+	if (node.folder)
+	{
+		if (questionbank.length==0) question.category=cat_name;	//check if the user just deleted the entire questionbank, including the top category. In that case, create a new top category.
+			else question.category=node.getPath(true)+"/"+cat_name;
+		if (node.getFirstChild()) current_question=node.getFirstChild().key;
+	}
+	else
+	{
+		question.category=questionbank[node.key].category+"/"+cat_name;
+		current_question=node.key;
+	}
+	questionbank.splice(1, 0, question); //store the question in the questionbank
+	display_questionbank();
+	$.ui.fancytree.getTree("#tree").activateKey(current_question);
+}
+
+function display_import_settings()
+{
+$("#import_settings").empty();	//clear any existing settings
+var html_code='<center><span class="headline_1">Import Settings</span></center><br>';
+switch ($("#select_questiontype").val())
+	{
+		case "multichoice": {html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333"><br><label for="import_question_single_answer">Single answer:</label><input id="import_question_single_answer" type="checkbox"><label for="import_question_shuffle">Shuffle:</label><input id="import_question_shuffle" type="checkbox"><br><label for="import_question_numbering">Numbering: </label><select id="import_question_numbering"><option value="0">none</option><option value="1">abc</option><option value="2">ABCD</option><option value="3">123</option></select><br><br>Correct answers are...<br><label for "import_correct_answer_indicator">...preceded by this text:</label><input id="import_correct_answer_indicator" type="text" size="3"><a href="#" class="tooltip"><img src="icon-help.png"><span>Correct choices are indicated by these preceding characters.<br>Example:<br>If you enter "*", then<br><i>This is a wrong answer.<br>*This is a correct answer.<br>*This is also a correct answer.</i></span></a><br><label for "import_correct_answer_number">...always answer number:</label><input id="import_correct_answer_number" type="number" style="width:3em"><a href="#" class="tooltip"><img src="icon-help.png"><span>The correct choice is always number 1, 2, 3, etc.</span></a><br><label for "import_correct_answer_lastline">...indicated in the last line:</label><input id="import_correct_answer_lastline" type="checkbox"><a href="#" class="tooltip"><img src="icon-help.png"><span>The correct choice is at the end of the last line, e.g. "Answer: D"</span></a>'; break;}
+
+		case "matching": {html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333"><br><label for="import_question_shuffle">Shuffle:</label><input id="import_question_shuffle" type="checkbox"><br><label for "import_matching_delimiter">Delimiter for text/answers:</label><input id="import_matching_delimiter" type="text" size="3"><a href="#" class="tooltip"><img src="icon-help.png"><span>The character used to separate the texts from the corresponding correct answers.<br>Example (here the delimiter is a comma):<br><i>Fruit or vegetable?<br>Banana,Fruit<br>Apple,Fruit<br>Potato,Vegetable<br>Tomato,Vegetable</i></span></a>'; break;}
+		
+		case "shortanswer": {html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333"><br><label for="import_question_case_sensitive">Case sensitive:</label><input id="import_question_case_sensitive" type="checkbox"><br><label for="import_question_embedded_answer_delimiters">Embedded answers:</label><input id="import_question_embedded_answer_delimiters" type="text" size="5"><a href="#" class="tooltip"><img src="icon-help.png"><span>3 characters indicating beginning, separator and end of embedded answers.<br>Example:<br><i>This is (a/an) question.</i> Enter: "(/)"</span></a>'; break;}
+	
+		case "truefalse": {html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="1"><br><label for "import_correct_answer_word">The word for "True":</label><input id="import_correct_answer_word" type="text" size="5" value="true"><a href="#" class="tooltip"><img src="icon-help.png"><span>If this word is anywhere in the second line of the question, the answer is considered true.<br>Example:<br><i>Is the sky blue?<br>Answer: true</i><br>The default is "true", but it could vary depending on your language (correcto, richtig,...).</span></a>'; break;}
+
+		case "numerical":{html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333"></a>'; break;}
+	
+		case "essay": {html_code +='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333">'; break;}
+	
+		case "cloze": {html_code +='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333">'; break;}
+	
+		case "description": {html_code += '<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a>';break;}
+
+		case "ddwtos": {html_code+='<label for="import_question_name">Name:</label><input id="import_question_name" type="text" size="20" value="New question #"><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br><label for="import_question_tags">Tags:</label><input id="import_question_tags" type="text" size="20"><a href="#" class="tooltip"><img src="icon-help.png"><span>Enter the tags, separated by a comma.<br>Example: "vocabulary,beginner,family"</span></a><br><label for="import_question_default_points">Grade:</label><input id="import_question_default_points" type="text" size="3" value="1"><label for="import_question_default_penalty">Penalty:</label><input id="import_question_default_penalty" type="text" size="3" value="0.3333"><br><label for="import_question_shuffle">Shuffle:</label><input id="import_question_shuffle" type="checkbox">'; break;}
+	}
+
+	$("#import_settings").append(html_code);	//insert the code into the document
+}
+
+function find_issues(nr)
+{
+if (nr<0 || questionbank[nr].type=="category") return;
+questionbank[nr].issue="";
+switch (questionbank[nr].type)
+			{
+				case "category": {
+					break;
+					}
+				case "shortanswer": {
+				if (questionbank[nr].choices.length == 0) questionbank[nr].issue += "No answers.\x0A";
+				if (questionbank[nr].value.indexOf("100") == -1) questionbank[nr].issue += "Shortanswer question without a 100% correct answer.\x0A";
+				break;
+				}
+				case "numerical": {
+				if (questionbank[nr].choices.length == 0) questionbank[nr].issue += "No answers.\x0A";
+				if (questionbank[nr].value.indexOf("100") == -1) questionbank[nr].issue += "Numerical question without a 100% correct answer.\x0A";
+				break;
+				}
+				case "multichoice": {
+				if (questionbank[nr].choices.length == 0) questionbank[nr].issue += "No answers.\x0A";
+				if (questionbank[nr].choices.length < 2) questionbank[nr].issue += "Multiple choice question with fewer than 2 answers.\x0A";
+				if (questionbank[nr].value.indexOf("100") == -1) questionbank[nr].issue += "Multiple choice question without a 100% correct answer.\x0A";
+				break;
+				}
+				case "ddwtos": {
+					if (questionbank[nr].choices.length == 0) questionbank[nr].issue += "No answers.\x0A";
+					count=ddwtos_gap_count(questionbank[nr].question_text);
+					if (count < 0) questionbank[nr].issue += 'Error in "Drag and Drop into Text"-question text.\x0A';
+					if (count > questionbank[nr].choices.length) questionbank[nr].issue += '"Drag and Drop into Text"- question has '+count+' gaps, but there are only '+questionbank[nr].choices.length+' choices.\x0A';
+				break;
+				}
+			}
+//If there is an issue in this question, add two red exclamation marks and add a description of the issue to the tooltip of the current node in the tree
+    var node = 	$.ui.fancytree.getTree("#tree").getNodeByKey(nr);
+	if (node == null) return;
+	if (questionbank[nr].issue == ""){node.fromDict({tooltip:questionbank[nr].question_text}); node.setTitle(questionbank[nr].name);}
+	else
+	{node.fromDict({tooltip:questionbank[nr].issue}); node.setTitle('<span style="color: #FF0000">!! </span>'+questionbank[nr].name);}
+}
+
+
+function find_all_issues()
+{
+for (var i=questionbank.length-1; i>=0; i--) find_issues(i);
+}
+
+//removes all the HTML-tags we don't want. mode=0 Only strip some tags, mode=1 Strip absolutely all HTML
+function strip_html(t, mode)
+{
+var repl=t;
+if (mode == 0) {
+	for (var tag_nr=0; tag_nr<del_tags.length;tag_nr++) {repl=repl.replaceAll(del_tags[tag_nr], "");}
+	return(repl);
+	}
+if (mode == 1) {
+	repl = repl.replace("<![CDATA[", "").replace("]]>", "");
+	repl=repl.replace(/<[^>]*>?/gm, '');
+	return(repl);
+	}
+return(repl);
+}
+
+//converts the question into text using the global formatting parameters
+function question_2_text_formatted(bank, nr)
+{
+var text = settings_text_before_question;
+var q_style='<span style="'+settings_text_style_questiontext+'">';
+var c_style='<span style="'+settings_text_style_choices+'">';
+if (bank[nr].type == "category") return("["+nr+"]");	//if it's a category, exit. Just in case the calling function didn't already make this check.
+switch (bank[nr].type)
+	{
+		case "essay": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			text += settings_text_answer_text+"<br>__________________________________________________<br>__________________________________________________<br>__________________________________________________<br>";
+			break;}
+		case "description": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			break;}
+		case "shortanswer": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			text += settings_text_answer_text+"<br>";
+			break;
+		}
+		case "numerical": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			text += settings_text_answer_text+"<br>";
+			break;
+		}
+		case "ddwtos": {
+			text += q_style+ ddwtos_gap_replace(bank[nr].question_text)+"</span><br>";
+			text += bank[nr].choices.join(" | ")+"<br>";
+			break;
+		}
+		case "multichoice": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				numbering = "";
+				if (bank[nr].numbering == 1) numbering = char_numbering_lower.charAt(choice_nr)+") ";
+				if (bank[nr].numbering == 2) numbering = char_numbering_upper.charAt(choice_nr)+") ";
+				if (bank[nr].numbering == 3) numbering = (choice_nr+1).toString()+". ";
+				text += c_style + numbering + bank[nr].choices[choice_nr]+"</span><br>";
+				}
+			break;
+		}
+		case "truefalse": {
+			text += q_style+bank[nr].question_text+"</span><br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				text += c_style + bank[nr].choices[choice_nr]+"</span><br>";
+				}
+			break;
+		}
+	}
+text += settings_text_after_question;
+if (settings_text_strip_html) text = strip_html(text, 0);
+return (text);
+}
+
+function store_text_display_settings()
+{
+settings_text_answer_text=$("#display_as_text_answer_text").val();
+settings_text_style_questiontext=$("#display_as_text_question_text_style").val();
+settings_text_style_choices=$("#display_as_text_choices_text_style").val();
+settings_text_strip_html=$("#display_as_text_strip_html").prop('checked');
+settings_text_show_answerkey=$("#display_as_text_answerkey").prop('checked');
+settings_text_number_questions=$("#display_as_text_numbered").prop('checked');
+settings_text_shuffle_questions=$("#display_as_text_shuffle_questions").prop('checked');
+settings_text_columns=$("#display_as_text_columns").val();
+settings_text_rows_per_page=$("#display_as_text_rows_per_page").val();
+settings_text_title=$("#display_as_text_title").val();
+
+}
+
+//returns all the correct answers (not zero) for the question separated by <br>
+function get_answerkey(nr)
+{
+if (questionbank[nr].type == "category") return("");	//if it's a category, exit. Just in case the calling function didn't already make this check.
+var text = "";
+switch (questionbank[nr].type)
+	{
+		case "shortanswer":
+		case "truefalse":
+		case "multichoice": {
+			for (var choice_nr=0;choice_nr<questionbank[nr].choices.length;choice_nr++)
+				{
+				if (questionbank[nr].value[choice_nr] !="" && questionbank[nr].value[choice_nr] != "0")
+					{
+					numbering = "";
+					if (questionbank[nr].numbering == 1) numbering = char_numbering_lower.charAt(choice_nr)+") ";
+					if (questionbank[nr].numbering == 2) numbering = char_numbering_upper.charAt(choice_nr)+") ";
+					if (questionbank[nr].numbering == 3) numbering = (choice_nr+1).toString()+". ";
+					text += numbering + "("+strip_html(questionbank[nr].choices[choice_nr], 1)+", "+questionbank[nr].value[choice_nr]+"%)<br>";
+					}
+				}
+			break;
+		}
+	}
+return (text);
+}
+
+
+function copyToClip(str) {
+  function listener(e) {
+	if (str.indexOf("<pre>") == 0) //if the string is wrapped in <pre>, we'll treat it as pure text, otherwise as HTML
+		{
+			str=strip_html(str, 1);
+			e.clipboardData.setData('text/plain', str);
+		}
+			else
+			e.clipboardData.setData('text/html', str);	
+    e.preventDefault();
+  }
+  document.addEventListener("copy", listener);
+  document.execCommand("copy");
+  document.removeEventListener("copy", listener);
+  alert("Text copied to clipboard.");
+};
+
+function PrintElem(elem, title)
+{
+    var mywindow = window.open('', 'PRINT', 'height=600,width=800');
+
+    mywindow.document.write('<html><head><title>' + title + '</title>');
+    mywindow.document.write('</head><body >');
+    mywindow.document.write(document.getElementById(elem).innerHTML);
+    mywindow.document.write('</body></html>');
+
+    mywindow.document.close(); // necessary for IE >= 10
+    mywindow.focus(); // necessary for IE >= 10*/
+
+    mywindow.print();
+    mywindow.close();
+
+    return true;
+}
+
+function display_selected_as_text()
+{
+var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+if (settings_text_shuffle_questions) all_checked = shuffle_array(all_checked);
+var output ='<h1>' + settings_text_title  + '</h1>';
+var q_num=1;
+var pos=0;
+while (pos < all_checked.length)
+{
+	output+="<table>";
+	for (rows=0; rows<settings_text_rows_per_page; rows++)
+		{
+			output+='<tr>';
+				for (var cols=0; cols<settings_text_columns;cols++)
+				{
+					output+='<td>';
+					if (pos<all_checked.length)
+						{
+							while (questionbank[all_checked[pos].key].type == "category" && pos < all_checked.length) {pos++;}
+							if (questionbank[all_checked[pos].key].type == "description" || questionbank[all_checked[pos].key].type == "essay")	//essay questions and descriptions get an entire row
+								{
+									output += '</td></tr></table><p style="page-break-before: always;">&nbsp;</p><table><tr><td>';cols=settings_text_columns;rows=settings_text_rows_per_page;
+								}
+							if (settings_text_number_questions) output += q_num + ". ";	//number the question
+							output += question_2_text_formatted(questionbank, all_checked[pos].key);	//grab the question text, choices, etc.
+						}
+					pos++;q_num++;
+					output+='</td>';
+				}
+			output+='</tr>';
+		}
+	output+='</table><p style="page-break-before: always;">&nbsp;</p>';
+}
+
+if (settings_text_show_answerkey) {	
+	q_num=0;
+	for (var i=0; i<all_checked.length;i++)
+		{
+		if (questionbank[all_checked[i].key].type == "category") continue;
+		q_num++;
+		output += q_num +": "+get_answerkey(all_checked[i].key);
+		}
+	}
+
+var html_code='<div style="position:relative;">'+
+	'<button onclick="store_text_display_settings();modal_close();" value="close_modal_display_selected_as_text" class="close_btn">&#10005;</button>'+
+	'<span class="modal_title">Text of the selected questions</span><hr>'+
+	'<input type="checkbox" id="display_as_text_strip_html" value="'+settings_text_strip_html+'" ';
+	if (settings_text_strip_html) html_code +="checked";
+	html_code +='> <label for="display_as_text_strip_html">Strip original HTML</label>&nbsp;&nbsp;'+
+	'<input type="checkbox" id="display_as_text_numbered" value="'+settings_text_number_questions+'" ';
+	if (settings_text_number_questions) html_code +="checked";
+	html_code +='> <label for="display_as_text_numbered">Number questions</label><br>'+
+	'"Answer"-text: <input type="text" id="display_as_text_answer_text" value="'+settings_text_answer_text+'"><br>'+
+	'Title of your quiz: <input type="text" id="display_as_text_title" value="'+settings_text_title+'"><br>'+
+	'Style for question texts: <input type="text" id="display_as_text_question_text_style" value="'+settings_text_style_questiontext+'"><br>'+
+	'Style for choices: <input type="text" id="display_as_text_choices_text_style" value="'+settings_text_style_choices+'"><br>'+
+	'Columns: <input type="text" id="display_as_text_columns" size="3" value="'+settings_text_columns+'">'+
+	'Rows per page: <input type="text" id="display_as_text_rows_per_page" size="3" value="'+settings_text_rows_per_page+'"><a href="#" class="tooltip"><img src="icon-help.png"><span>You may have to fiddle with these settings to get the correct results. Longer questions can easily trigger a spill of text into the next page.</span></a><br>'+
+	'<input type="checkbox" id="display_as_text_answerkey" value="'+settings_text_show_answerkey+'" ';
+	if (settings_text_show_answerkey) html_code +="checked";
+	html_code +='> <label for="display_as_text_answerkey">Show answer key below questions</label><br>'+
+	'<input type="checkbox" id="display_as_text_shuffle_questions" value="'+settings_text_shuffle_questions+'" ';
+	if (settings_text_shuffle_questions) html_code +="checked";
+	html_code +='> <label for="display_as_text_shuffle_questions">Shuffle questions</label><a href="#" class="tooltip"><img src="icon-help.png"><span>If checked, the questions are shuffled every time you click Update.</span></a><br>'+
+	'<center><button onclick="store_text_display_settings();display_selected_as_text();" value="update_text_display" class="menu_btn">Update</button></center>'+
+	'<div id="selected_questions_text" style="margin: auto; border: 2px grey solid; width: 80%; height: 450px; overflow: scroll;">'+output+'</div>'+
+	'<center><button onclick="copyToClip(document.getElementById(\'selected_questions_text\').innerHTML);" value="display_selected_as_text_copy_to_clipboard" class="menu_btn">Copy to Clipboard</button>'+
+	'&nbsp;&nbsp;<button onclick="PrintElem(\'selected_questions_text\', \''+settings_text_title+'\');" class="menu_btn">Print</button></center></div>';
+
+$("#myModal-content").empty();
+$("#myModal-content").append(html_code);	//insert the code into the document
+modal_open();
+}
+
+//apply the changes made in bulk_edit to the selected questions in questionbank "bank", which could be the main questionbank or a deep copy of it.
+function apply_bulk_changes(bank)
+{
+    if (!bank) return;
+    const letters="abcdefghijklmnopqrstuvwxyz";
+	var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	var changed_nodes = 0;	//how many numbers we already changed. Not the same as "i", since there could be some categories in there
+    var answerkey_lines = "";
+	var answerkey_counter=0;
+    if (document.getElementById("multichoice_answerkey")) answerkey_lines = document.getElementById("multichoice_answerkey").value.split(/[\r\n|\r|\n]+/);   //get the content of the multichoice answerkey-box and split it into lines
+	for (var i=0; i<all_checked.length; i++)
+	{
+		nr=all_checked[i].key;
+		if (bank[nr].type == "category") continue;	//this is a category, so skip it
+		changed_nodes++;
+		if ($("#edit_questions_name").val().length>0) bank[nr].name=$("#edit_questions_name").val().replace(/#/g, changed_nodes);
+		if ($("#edit_questions_tags").val().length>0) 
+		{
+			if ($("#edit_questions_tags_add").prop('checked')) bank[nr].tags.push($("#edit_questions_tags").val().split(",")); else bank[nr].tags=$("#edit_questions_tags").val().split(",");
+		}
+		if ($("#edit_questions_grade").val().length>0) bank[nr].default_grade=$("#edit_questions_grade").val();
+		if ($("#edit_questions_penalty").val().length>0) bank[nr].penalty=$("#edit_questions_penalty").val();
+		if (bank[nr].type=="multichoice")
+            {
+                if ($("#edit_questions_shuffle").val() != "no_change") bank[nr].shuffle_answers = $("#edit_questions_shuffle").val() == "1";
+                if ($("#edit_questions_single_answer").val() != "no_change") bank[nr].single_answer = $("#edit_questions_single_answer").val() == "1";
+		        if ($("#edit_questions_numbering").val() != "no_change") bank[nr].numbering = $("#edit_questions_numbering").val();
+                if (answerkey_lines.length>0 && answerkey_counter<answerkey_lines.length) //if there is some text in the answerkey box and there are more lines
+                {
+                    var correct_answer=answerkey_lines[answerkey_counter].substring(answerkey_lines[answerkey_counter].length-1).toLowerCase();
+					if (correct_answer.length > 0)	//do this only if an answer has been found
+					{
+						for (k=0; k<bank[nr].choices.length;k++)    //change all the choices, since we'll have to set the incorrect ones to zero
+						{
+							if (k == letters.indexOf(correct_answer)) bank[nr].value[k]="100"; else bank[nr].value[k]="0";   //the correct answer receives 100%, the others zero
+						}
+						answerkey_counter++;
+					}
+                }
+            } 
+
+		if (bank[nr].type=="shortanswer")
+        {
+            if ($("#edit_questions_case_sensitive").val() != "no_change") bank[nr].single_answer = $("#edit_questions_case_sensitive").val() == "1";
+        }
+	}
+}
+
+//returns a simple, unformatted version of the question nr in questionbank "bank" containing all the question's settings
+//the returned string can be used for previews and debugging
+function raw_question(bank, nr)
+{
+    var text='';
+if (bank[nr].type == "category") return(text);	//if it's a category, exit. Just in case the calling function didn't already make this check.
+text +="Type: "+bank[nr].type+"<br>";
+text +="Name: "+bank[nr].name+"<br>Tags: "+bank[nr].tags.join(",");
+if (bank[nr].default_grade) text += "<br>Grade: "+bank[nr].default_grade;
+if (bank[nr].penalty) text += "  Penalty: "+bank[nr].penalty;
+text += '<br>';
+switch (bank[nr].type)
+	{
+		case "essay":
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+            break;
+		case "description":
+            text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+            break;
+		case "shortanswer": {
+            text += "Case sensitive: "+bank[nr].case_sensitive+"<br>";
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				numbering = (choice_nr+1).toString()+". ";
+				text += numbering + bank[nr].choices[choice_nr]+" ("+bank[nr].value[choice_nr]+"%)<br>";
+				}
+			break;
+		}
+		case "numerical": {
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				numbering = (choice_nr+1).toString()+". ";
+				text += numbering + bank[nr].choices[choice_nr]+" ("+bank[nr].value[choice_nr]+"%)<br>";
+				}
+			break;
+		}
+		case "multichoice": {
+            text += "Single answer: "+bank[nr].single_answer+"  Shuffle: "+bank[nr].shuffle_answers+"<br>";
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				numbering = "";
+				if (bank[nr].numbering == 1) numbering = char_numbering_lower.charAt(choice_nr)+") ";
+				if (bank[nr].numbering == 2) numbering = char_numbering_upper.charAt(choice_nr)+") ";
+				if (bank[nr].numbering == 3) numbering = (choice_nr+1).toString()+". ";
+				text += numbering + bank[nr].choices[choice_nr]+" ("+bank[nr].value[choice_nr]+"%)<br>";
+				}
+			break;
+		}
+		case "matching": {
+            text += "Shuffle: "+bank[nr].shuffle_answers+"<br>";
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+			for (var subquestion_nr=0;subquestion_nr<bank[nr].subquestion_text.length;subquestion_nr++)
+				{
+				text += bank[nr].subquestion_text[subquestion_nr]+" - "+bank[nr].subquestion_answer[subquestion_nr]+"<br>";
+				}
+			break;
+		}
+		case "ddwtos": {
+            text += "Shuffle: "+bank[nr].shuffle_answers+"<br>";
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim()+"<br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				text += (choice_nr+1)+". " + bank[nr].choices[choice_nr]+"<br>";
+				}
+			break;
+		}
+		case "truefalse": {
+			text += bank[nr].question_text.replace(/<[^>]*>?/gm, '').trim();+"<br>";
+			for (var choice_nr=0;choice_nr<bank[nr].choices.length;choice_nr++)
+				{
+				text += bank[nr].choices[choice_nr]+" ("+bank[nr].value[choice_nr]+"%)<br>";
+				}
+			break;
+		}
+	}
+return (text);
+}
+
+//returns a string containing the raw, unformatted text of all the questions in bank
+function raw_questions (bank, which_questions)
+{
+	var result = "";
+	for (var i=0; i<which_questions.length; i++)
+		{
+            if (bank[which_questions[i].key].type == "category") continue;    //skip if this is a category
+			 result += raw_question(bank, which_questions[i].key)+'<br>';
+		}
+	return (result);
+}
+
+//displays the preview in the bulk-edit modal using the changes made by the user, but without changing the main questionbank
+function bulk_edit_preview()
+{
+    let preview_array = $.extend(true,{},questionbank);	//create a deep copy of the entire questionbank for the preview
+    apply_bulk_changes(preview_array);  //apply the changes to our dummy questionbank
+    document.getElementById('preview_box').innerHTML=raw_questions(preview_array, $('#tree').fancytree('getTree').getSelectedNodes());  //output the raw text for the selected dummy questions
+}
+
+function clean_answerkey(txt)
+{
+const question_delimiter=[",","\t","\r\n","\r","\n"," "];
+const numbering_delimiter=[".",")","]","-","#"];
+
+for (var i=0;i<question_delimiter.length;i++) //break the answerkey into lines
+{
+txt=txt.replaceAll(question_delimiter[i], "***");
+}
+var lines = txt.split("***");
+
+//if there are leading numbers (i.e. the question numbers), pad them with zeros, so we can then easily sort the array. Reason: the question key may be in columns like so:
+//1)A 3)B 5)A
+//2)B 4)C 6)D
+//which means we need to restore the correct order
+for (var i=0;i<lines.length;i++)
+{
+for (var k=0;k<numbering_delimiter.length;k++)
+  {
+    var delim_pos=lines[i].indexOf(numbering_delimiter[k]);
+    if (delim_pos > -1)
+    {
+      lines[i] = lines[i].substring(0,delim_pos).padStart(4, '0')+"."+lines[i].substring(delim_pos+1);
+      }
+    }
+}
+
+lines.sort();
+for (var i=0;i<lines.length;i++) lines[i]=lines[i].replace(/^0+/, '');  //remove the leading zeros again to make it look prettier
+return(lines.join("\r\n"));
+}
+
+//opens a modal and lets the user edit multiple questions at once
+function bulk_edit()
+{
+var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+if (all_checked.length < 1) {alert("Please select at least one question first."); return;}
+
+var html_code='<div style="position:relative;">'+
+	'<div style="position:absolute; top:2px; right:2px;"><button onclick="modal_close();" class="close_btn">&#10005;</button></div>'+
+	'<span class="modal_title">Edit all selected questions</span><hr>'+
+    '<span class="headline_1">Preview</span>'+
+    '<div id="preview_box" style="float:left; margin: auto; border: 2px grey solid; width: 300px; height: 400px; overflow: scroll;"></div>'+
+    '<div id="settings_box" style="padding-left:310px; height:430px;">'+
+	'<span class="headline_1">All question types</span>(Empty fields = no change)<br><label for="edit_questions_name">Question name: </label> <input onkeyup="bulk_edit_preview();" type="text" id="edit_questions_name" size="20" value=""><a href="#" class="tooltip"><img src="icon-help.png"><span>Wildcards:<br># - Numbering (1, 2, 3,...)</span></a><br>'+
+	'<label for="edit_questions_tags">Question tags: </label> <input onkeyup="bulk_edit_preview();" type="text" id="edit_questions_tags" size="20" value="">&nbsp;<label for="edit_questions_tags_add">Append </label> <input onchange="bulk_edit_preview();"type="checkbox" id="edit_questions_tags_add"><br>'+
+	'<label for="edit_questions_grade">Default grade: </label> <input onkeyup="bulk_edit_preview();" type="text" id="edit_questions_grade" size="3" value=""><br>'+
+	'<label for="edit_questions_penalty">Penalty: </label> <input onkeyup="bulk_edit_preview();" type="text" id="edit_questions_penalty" size="3" value=""><br>'+
+	'<hr><span class="headline_1">Multiple Choice</span><label for="edit_questions_shuffle">Shuffle: </label> <select onchange="bulk_edit_preview();" id="edit_questions_shuffle"><option value="no_change">-</option><option value="1">Yes</option><option value="2">No</option></select><br>'+
+	'<label for="edit_questions_single_answer">Single answer: </label><select onchange="bulk_edit_preview();" id="edit_questions_single_answer"><option value="no_change">-</option><option value="1">Yes</option><option value="2">No</option></select><br>'+
+	'<label for="edit_questions_numbering">Numbering: </label><select onchange="bulk_edit_preview();" id="edit_questions_numbering"><option value="no_change">-</option><option value="0">none</option><option value="1">abc</option><option value="2">ABCD</option><option value="3">123</option></select><br>'+
+    'Answer key:<a href="#" class="tooltip"><img src="icon-help.png"><span>- Only multiple choice (single answer) questions<br>- One answer per line.<br>Format:<br>1.A<br>2.B<br>etc.</span></a><br><textarea onkeyup="bulk_edit_preview();" id="multichoice_answerkey" style="resize: none; height:100px; width:200px;"></textarea><br><button id="clean_answerkey_btn" onclick="document.getElementById(\'multichoice_answerkey\').value=clean_answerkey(document.getElementById(\'multichoice_answerkey\').value);bulk_edit_preview();">Clean</button><br>'+
+	'<hr><span class="headline_1">Shortanswer</span><label for="edit_questions_case_sensitive">Case sensitive: </label> <select id="edit_questions_case_sensitive"><option value="0">-</option><option value="1">Yes</option><option value="2">No</option></select></div><br>'+
+	'<center><button onclick="apply_bulk_changes(questionbank);modal_close();display_questionbank();show_question('+current_question+');" class="menu_btn">Apply</button></center></div>';
+$("#myModal-content").empty();
+$("#myModal-content").append(html_code);	//insert the code into the document
+bulk_edit_preview();
+modal_open();
+}
+
+function modal_open()
+{
+	document.getElementById("myModal").style.display = "block";
+}
+
+function modal_close()
+{
+	document.getElementById("myModal").style.display = "none";
+}
+
+function shuffle_array(array) {
+  let currentIndex = array.length,  randomIndex;
+  while (currentIndex != 0) {
+    randomIndex = Math.floor(Math.random() * currentIndex);
+    currentIndex--;
+    [array[currentIndex], array[randomIndex]] = [
+      array[randomIndex], array[currentIndex]];
+  }
+  return array;
+}
+
+//formats the selected text in the sandbox to make it digestible by the converter.
+//- removes leading and trailing spaces
+//- removes leading numbering
+function magic_formatting()
+{
+var textArea = document.getElementById("sandbox");
+var text =textArea.value;
+var result="";
+var indexStart=textArea.selectionStart;
+var indexEnd=textArea.selectionEnd;
+var rawtext=text.substring(indexStart, indexEnd);
+const choice_numbering=["A)", "B)", "C)", "D)", "E)", "F)", "G)", "H)","A]", "B]", "C]", "D]", "E]", "F]", "G]", "H]","A. ", "B. ", "C. ", "D. ", "E. ", "F. ", "G. ", "H. ", "a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)"]
+if (rawtext=="") {alert("Please select some text."); return "";}
+var lines = [];
+    $.each(rawtext.split(/\n/), function(i, line){	//split the text into lines
+        if(line){
+            lines.push(line);
+        } else {
+            lines.push("");
+        }
+    });
+
+	//assume that questions are numbered "1. blabla", etc. and replace the numbering with linebreaks
+	//also replace all the numbering of choices with linebreaks, in case more than one choice appears in the same line, e.g.
+		//a) blabla   b) blabla
+		//c) blabla   d) blabla
+		//note that an ordering like this will mess things up:
+		//a) blabla   c) blabla
+		//b) blabla   d) blabla
+
+for (var i=0;i<lines.length; i++)
+	{
+		lines[i] = lines[i].replaceAll('\r\n', "");
+		lines[i] = lines[i].trim();	//remove leading and trailing spaces
+		lines[i] = lines[i].replace(/^\d+\.\s*/, '\r\n'); //remove leading numbering (e.g. "10. blabla")
+		lines[i] = lines[i].replace(/^\d+\)\s*/, '\r\n'); //remove leading numbering (e.g. "10) blabla")
+		for (var k=0;k<choice_numbering.length;k++) lines[i] = lines[i].replaceAll(choice_numbering[k],'');	
+	}
+
+	result = lines.join("\r\n");	//join the lines
+	result = result.replace(/\n\s*\n/g, '\r\n\r\n');
+
+	lines = [];
+	$.each(result.split(/\n/), function(i, line){	//split the text into lines again, but preserve the linebreaks we've inserted
+        if(line){
+            lines.push(line.trim()+'\r\n');
+        } else {
+            lines.push('\r\n');
+        }
+    });
+	result=lines.join("").trim();
+textArea.value = text.substring(0, indexStart) + result + text.substring(indexEnd);	//insert the lines back into the textbox
+}
+
+//shows a question in the tree
+function show_question(nr)
+{
+	$("#tree").fancytree("getTree").activateKey(nr);
+}
+
+//puts a checkmark next to all questions in the array of question numbers
+function check_questions(result_list)
+{
+	for (var i=0; i<result_list.length; i++)
+	{
+		$.ui.fancytree.getTree("#tree").getNodeByKey(result_list[i]).setSelected(true);
+	}
+}
+
+//updates the field for the search results with the entries from results_list
+function output_search_results(result_list)
+{
+var html_code="";
+if (result_list.length==0) {$("#search_select_results_btn").hide(); $("#search_results").empty();return;}
+for (var i=0; i<result_list.length; i++)
+	{
+		html_code+='<button class="search_result_btn" onclick="modal_close();show_question('+result_list[i]+');">'+result_list[i]+'. '+questionbank[result_list[i]].name+'</button><br>';	//the user can click the questions to access them
+	}
+	$("#search_results").empty();	//delete any previous search results
+	$("#search_results").append(html_code);
+	$("#search_select_results_btn").empty();	//delete any previous search results
+	$("#search_select_results_btn").append("Select all "+result_list.length+" results");
+	$("#search_select_results_btn").show();
+	
+}
+
+//finds the global search term using the global search parameters and returns an array with the numbers of the matches
+function find_text()
+{
+	var matches=[];
+	if (settings_search_searchterm =="" && !settings_search_onlyissues) return (matches);
+for (var i=0; i<questionbank.length; i++)
+	{
+	var txt="";	//first we build the string we want to search based on the search parameters
+	if (questionbank[i].type == "category") continue;
+	if (settings_search_onlyissues && questionbank[i].issue == "") continue;
+	if (settings_search_name) txt=questionbank[i].name;
+	if (settings_search_text) txt+=questionbank[i].question_text;
+	if (settings_search_choices) txt+=questionbank[i].choices.join(",");
+	if (settings_search_tags) txt+=questionbank[i].tags.join(",");
+	if (settings_search_casesensitive) 
+		{
+			a=txt; b=settings_search_searchterm;
+		}
+		else
+		{
+			a=txt.toLowerCase();b=settings_search_searchterm.toLowerCase();
+		}
+
+		var regex = new RegExp(b);
+		if (settings_search_wholewords) regex='\\b' + b + '\\b';
+	if (a.search(regex)>-1) matches.push(i);	//if a match is found, add the question number to the array
+	}
+	return(matches);
+}
+
+//stores the search parameters from the search modal in the global parameters
+function store_search_parameters()
+{
+	settings_search_searchterm = $("#search_text").val();
+	settings_search_name = $("#search_option_name").prop('checked');
+	settings_search_text = $("#search_option_text").prop('checked');
+	settings_search_choices = $("#search_option_choices").prop('checked');
+	settings_search_tags = $("#search_option_tags").prop('checked');
+	settings_search_casesensitive = $("#search_option_casesensitive").prop('checked');
+	settings_search_wholewords = $("#search_option_wholewords").prop('checked');
+	settings_search_onlyissues = $("#search_option_onlyissues").prop('checked');
+}
+
+function search()
+{
+	if (sidebar_visible) $("#sidebar_wrapper").empty();
+	var html_code='<div style="position:relative; margin:auto; width:95%")><button onclick="store_search_parameters();show_sidebar(false);" class="close_btn">&#10005;</button>'+
+	'<span class="modal_title">Find text</span><hr>'+
+	'<label for="search_text">Find: </label> <input type="text" id="search_text" size="30" value="'+settings_search_searchterm+'"><br><br>'+
+	'<label for="search_option_name">Names:</label><input type="checkbox" id="search_option_name" ';
+	if (settings_search_name) html_code +="checked";
+	html_code+='>&nbsp;&nbsp;<label for="search_option_text">Question text:</label><input type="checkbox" id="search_option_text" ';
+	if (settings_search_text) html_code +="checked";
+	html_code+='>&nbsp;&nbsp;<label for="search_option_choices">Choices:</label><input type="checkbox" id="search_option_choices" ';
+	if (settings_search_choices) html_code +="checked";
+	html_code+='>&nbsp;&nbsp;<label for="search_option_tags">Tags:</label><input type="checkbox" id="search_option_tags" ';
+	if (settings_search_tags) html_code +="checked";
+	html_code+='>&nbsp;<br>'+
+	'<label for="search_option_casesensitive">Case sensitive:</label><input type="checkbox" id="search_option_casesensitive" ';
+	if (settings_search_casesensitive) html_code +="checked";
+	html_code+='>&nbsp;&nbsp;<label for="search_option_wholewords">Whole words only:</label><input type="checkbox" id="search_option_wholewords" ';
+	if (settings_search_wholewords) html_code +="checked";
+	html_code+='><br><label for="search_option_onlyissues">Only questions with issues:</label><input type="checkbox" id="search_option_onlyissues" ';
+	if (settings_search_wholewords) html_code +="checked";
+	html_code+='><center><button onclick="store_search_parameters(); output_search_results(find_text());" class="menu_btn">Search</button>'+
+		'<br>You can click the search results to open them in the question bank.<br>'+
+	'<div id="search_results" style="position:relative; width: 100%; height: 200px; overflow-y: auto; margin: auto;"></div>'+
+	'<button onclick="check_questions(find_text());" class="menu_btn" id="search_select_results_btn" style="display:none;">Select results</button></center></div>';
+	$("#sidebar_wrapper").append(html_code);	//insert the code into the document
+	show_sidebar(true);	
+}
+
+function limit_length_to(s, len) {
+    return (s != null && s.length > (len-1)) ? s.substring(0, len) : s
+}
+
+function show_sandbox()
+{
+	if (sidebar_visible) $("#sidebar_wrapper").empty();
+var html_code='<div style="position:relative; margin:auto; width:90%;"><button onclick="show_sidebar(false);" class="close_btn">&#10005;</button>'+
+		'<span class="modal_title">Import</span><hr>'+
+		'<div id="sandbox_menu_buttons"><button onclick=\'kahoot_questions(document.getElementById("sandbox").value)\'><a href="#" class="tooltip"><img src="icon-kahoot.png"><span>*EXPERIMENTAL*</span></a></button>'+
+		'<button onclick=\'document.getElementById("sandbox").value=sparknotes_questions(document.getElementById("sandbox").value)\'><a href="#" class="tooltip"><img src="icon-sparknotes.png"><span>*EXPERIMENTAL*<br>Importing from Sparknotes:<br>1. Use Google Chrome and find a quiz on Sparknotes.<br>2. Find the quiz you want to import.<br>3. In Chrome, open the top right menu, go to "More Tools > Developer Tools"<br>4. In the "Elements"-tab, hover over the initial HTML-tag and right-click. Select "Copy > Copy outerHTML"<br>5. Paste the text into the field below and click this button.</span></a></button>'+
+		'<button onclick="magic_formatting()" value="magic_formatting"><a href="#" class="tooltip"><img src="icon-magic-wand.png"><span>Magic Formatting:<br>- Trim spaces<br>- Remove all numbering<br>- separate text and choices into separate lines</span></a></button></div>'+
+		'<textarea id="sandbox">'+sandbox_instructions+
+		'</textarea><br>'+
+		'<label for="select_questiontype" title="Choose the type of question you would like to import into the questionbank.">Questiontype:</label>'+
+		'<select id="select_questiontype" onchange="display_import_settings()">'+
+		'<option value="-">-</option>'+
+		'<option value="multichoice">Multiple Choice</option>'+
+		'<option value="shortanswer">Shortanswer</option>'+
+		'<option value="truefalse">True/False</option>'+
+		'<option value="essay">Essay</option>'+
+		'<option value="matching">Matching</option>'+
+		'<option value="numerical">Numerical</option>'+
+		'<option value="cloze">Cloze</option>'+
+		'<option value="description">Description</option>'+
+		'<option value="ddwtos">Drag and Drop into Text</option>'+
+		'</select>'+
+		'<button onclick="bulk_import()" value="import" class="menu_btn">Import</button>'+
+		'<div id="import_settings">'+
+		'</div></div>';
+	$("#sidebar_wrapper").append(html_code);	//insert the code into the document
+	show_sidebar(true);	
+}
+
+//converts the selected questions into the Kahoot-format and updates the respective fields in the export-modal
+function export_kahoot()
+{
+	var html_code="<table>";
+	$("#export_instructions").empty();
+	$("#export_instructions").append('1. Click <a href="https://kahoot.com/library/quiz-spreadsheet-template/" target="_blank">here</a> to download Kahoot!\'s import-template and open it in Excel.<br>2. Copy the text below to the clipboard, paste it into the template and save the file.<br>4. Log into your Kahoot! account and create a new Kahoot. Then add a new question and click on "Import Spreadsheet". Upload your file.<br><b>Kahoot\'s restrictions:</b> Only multiple choice questions, a maximum of 4 answers per question, character limits (120 for question texts, 75 for answers (we will truncate your texts for you).');
+//generate Kahoot code here and insert it into export_text
+var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	if (all_checked.length < 1) return;
+	for (var i=0; i<all_checked.length;i++)
+		{
+			nr=all_checked[i].key;
+			if (questionbank[nr].type == "category") continue;	//this is a category, so skip it
+			html_code+='<tr>';
+			if (questionbank[nr].type == "multichoice")
+				{
+				html_code+='<td>'+limit_length_to(strip_html(questionbank[nr].question_text, 1), 120)+'</td>';
+				for (var c=0;c<4;c++)
+				{
+					if (questionbank[nr].choices[c]) html_code+='<td>'+limit_length_to(strip_html(questionbank[nr].choices[c], 1), 75)+'</td>'; else  html_code+='<td></td>';
+				}
+				html_code+='<td>60</td><td>';
+				for (var c=0;c<4;c++)
+				{
+					if (questionbank[nr].value[c] == '100') html_code+=(c+1)+',';
+				}
+				html_code = html_code.slice(0, -1); 
+				html_code+='</td>';
+			}
+		html_code+='</tr>';
+		}
+	html_code+='</table>';
+	$("#export_text").empty();	//delete any previous search results
+	$("#export_text").append(html_code);
+}
+
+//converts the selected questions into the Quizzizz-format and updates the respective fields in the export-modal
+function export_quizzizz()
+{
+	var html_code="<table>";
+	$("#export_instructions").empty();
+	$("#export_instructions").append('1. Click <a href="https://cf.quizizz.com/xlsx/QuizizzSampleSpreadsheet.xlsx">here</a> to download Quizzizz\'s import-template and open it in Excel.<br>2. Copy the text below to the clipboard.<br>3. Paste the copied text into the template (the top left cell in the light green space).<br>NOTE: Not all Moodle question types are compatible with Quizzizz. Incompatible questions will not be included and some questions may be modified.');
+//generate Quizzizz code here and insert it into export_text
+var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	if (all_checked.length < 1) return;
+	for (var i=0; i<all_checked.length;i++)
+	{
+		nr=all_checked[i].key;
+		if (questionbank[nr].type == "category") continue;	//this is a category, so skip it
+		html_code+='<tr>';
+		switch (questionbank[nr].type)
+		{
+			case "multichoice":
+				html_code+='<td>'+strip_html(questionbank[nr].question_text)+'</td>';
+				if (questionbank[nr].single_answer) html_code+= '<td>Multiple Choice</td>'; else html_code+='<td>Checkbox</td>';
+				for (var c=0;c<5;c++)
+					{
+						if (questionbank[nr].choices[c]) html_code+='<td>'+strip_html(questionbank[nr].choices[c], 1)+'</td>'; else  html_code+='<td></td>';
+					}
+				html_code+='<td>';
+				for (var c=0;c<4;c++)
+				{
+					if (questionbank[nr].value[c] == '100') html_code+=(c+1)+',';
+				}
+				html_code = html_code.slice(0, -1); 
+				html_code+='</td><td>30</td><td></td>';
+				break;
+			case "shortanswer":
+			html_code+='<td>'+questionbank[nr].question_text+'</td><td>Fill-in-the-Blank</td>';
+				for (var c=0;c<5;c++)
+					{
+						if (questionbank[nr].choices[c] && questionbank[nr].value[c] == '100') html_code+='<td>'+questionbank[nr].choices[c]+'</td>'; else  html_code+='<td></td>';
+					}
+				html_code+='<td></td><td>30</td><td></td>';
+				break;	
+			case "essay":
+				html_code+='<td>'+questionbank[nr].question_text+'</td><td>Open-Ended</td><td></td><td></td><td></td><td></td><td></td><td></td><td>180</td><td></td>';
+				break;
+		}
+		html_code+='</tr>';
+	}
+	html_code+='</table>';
+	$("#export_text").empty();	//delete any previous search results
+	$("#export_text").append(html_code);
+}
+
+function export_blackboard()
+{
+	var html_code="";
+	$("#export_instructions").empty();
+	$("#export_instructions").append('1. Copy the text below to the clipboard.<br>2. Paste the copied text into an empty textfile (e.g. in Notepad).<br>NOTE: Not all Moodle question types are compatible with Blackboard. Incompatible questions will not be included and some questions may be modified.');
+//generate Blackboard code here and insert it into export_text
+	var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	if (all_checked.length < 1) return;
+	for (var i=0; i<all_checked.length;i++)
+		{
+			nr=all_checked[i].key;
+			if (questionbank[nr].type == "category") continue;	//this is a category, so skip it
+			switch (questionbank[nr].type)
+			{
+				case "multichoice":
+					if (questionbank[nr].single_answer) html_code+='MC\t'; else html_code+='MA\t';
+					html_code+=questionbank[nr].question_text+'\t';
+					for (var c=0;c<questionbank[nr].choices.length;c++)
+					{
+						html_code+=questionbank[nr].choices[c]+'\t';
+						if (questionbank[nr].value[c] == '100') html_code+='correct\t'; else html_code+='incorrect\t';
+					}
+					break;
+				case "truefalse":
+					html_code+='TF\t'+questionbank[nr].question_text+'\t';
+					break;
+				case "essay":
+					html_code+='ESS\t'+questionbank[nr].question_text+'\t';
+					break;
+				case "shortanswer":
+					html_code+='FIB\t'+questionbank[nr].question_text+'\t';
+					for (var c=0;c<questionbank[nr].choices.length;c++)
+						{
+							if (questionbank[nr].value[c] == '100') html_code+=questionbank[nr].choices[c]+'\t'; //in Moodle there can also be false answers to shortanswer questions, e.g. to provide helpful feedback. Note that Moodle also allows wildcards here, while Blackboard (probably) doesn't.
+						}
+					break;
+			}
+		html_code+='\r\n';
+		}
+	html_code='<pre>'+strip_html(html_code, 1)+'</pre>';
+	$("#export_text").empty();	//delete any previous search results
+	$("#export_text").append(html_code);
+}
+
+function export_d2l()
+{
+	var html_code="";
+	$("#export_instructions").empty();
+	$("#export_instructions").append('1. Copy the text below to the clipboard.<br>2. Paste the copied text into an empty textfile (e.g. in Notepad).<br>NOTE: Not all Moodle question types are compatible with D2L. Incompatible questions will not be included and some questions may be modified.');
+//generate D2L code here and insert it into export_text
+var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	if (all_checked.length < 1) return;
+	for (var i=0; i<all_checked.length;i++)
+		{
+			nr=all_checked[i].key;
+			if (questionbank[nr].type == "category") continue;	//this is a category, so skip it
+			html_code+="NewQuestion,";
+			switch (questionbank[nr].type)
+			{
+				case "multichoice":
+					if (questionbank[nr].single_answer) html_code+='MC,'; else html_code+='MS,';
+					html_code+='\r\n';
+					html_code+='QuestionText,"'+questionbank[nr].question_text+'",\r\n';
+					for (var c=0;c<questionbank[nr].choices.length;c++) html_code+='Option,'+questionbank[nr].value[c]+',"'+questionbank[nr].choices[c]+'",\r\n';
+					break;
+				case "truefalse":
+					html_code+='TF,\r\n';
+					html_code+='QuestionText,"'+questionbank[nr].question_text+'",\r\nTRUE,'+questionbank[nr].value[0]+'\r\nFALSE,'+questionbank[nr].value[1];
+					break;
+				case "essay":
+					html_code+='WR,\r\nQuestionText,"'+questionbank[nr].question_text+'",\r\nAnswerKey, ,\r\n';
+					break;
+				case "shortanswer":
+					html_code+='SA,\r\n';
+					html_code+='QuestionText,"'+questionbank[nr].question_text+'",';
+					for (var c=0;c<questionbank[nr].choices.length;c++) html_code+='Answer,'+questionbank[nr].value[c]+',"'+questionbank[nr].choices[c]+'",\r\n';
+					break;
+			}
+			html_code+='\r\n';
+		}
+	html_code='<pre>'+strip_html(html_code,1)+'</pre>';
+	$("#export_text").empty();	//delete any previous search results
+	$("#export_text").append(html_code);
+}
+
+function export_selected()
+{
+	var html_code='<div style="position:relative;">'+
+	'<button onclick="modal_close();" class="close_btn">&#10005;</button>'+
+	'<span class="modal_title">Export the selected questions</span><hr>'+
+	'<center><button onclick="export_kahoot();" id="export_kahoot" class="menu_btn">Kahoot</button>&nbsp;'+
+	'<button onclick="export_quizzizz();" id="export_quizzizz" class="menu_btn">Quizzizz</button>&nbsp;'+
+	'<button onclick="export_blackboard();" id="export_blackboard" class="menu_btn">Blackboard</button>&nbsp;'+
+	'<button onclick="export_d2l();" id="export_d2l" class="menu_btn">D2L/Brightspace</button></center><br>'+
+	'<div id="export_instructions"></div>'+
+	'<div id="export_text" style="margin: auto; border: 2px grey solid; width: 80%; height: 500px; overflow: scroll;"></div>'+
+	'<center><button onclick="copyToClip(document.getElementById(\'export_text\').innerHTML);" class="menu_btn">Copy to Clipboard</button></center></div>';
+
+$("#myModal-content").empty();
+$("#myModal-content").append(html_code);	//insert the code into the document
+modal_open();
+}
+
+function replaceAll(str, find, replace) {
+  return str.replace(new RegExp(escapeRegExp(find), 'g'), replace);
+}
+
+function sparknotes_questions(html_code)
+{
+var result="";
+var correct_answer_indicator = '*';
+var pre_questiontext ='<h3 class="semi-bold">';
+var post_questiontext = '</h3>';
+var pre_choice = '<li';
+var post_choice = '</li>';
+var true_answer = "";
+var choice_dummy="";
+
+html_code = html_code.replace(/(\r\n|\n|\r)/gm, " ");	//remove all linebreaks and replace them with spaces
+
+while (html_code.indexOf(pre_questiontext)>-1)
+{
+	html_code = html_code.substring(html_code.indexOf(pre_questiontext)+pre_questiontext.length); //skip to the beginning of the next question text
+	var s = html_code.substring(0, html_code.indexOf(post_questiontext)); //get the question text
+	if (s.indexOf("</div")>-1)       //in case there's a stupid <div> in front of the question text, delete it
+                    {
+                        s = s.substring(s.indexOf("</div>")+6).trim();
+                    }
+	result += s.replace('\t','')+'\r\n';
+	html_code=html_code.substring(html_code.indexOf(post_questiontext)+post_questiontext.length);	//move ahead by chopping the proccessed text off of the beginning of the string
+	choice_num=0;
+	while (choice_num <4) //do this until we run out of questions
+	{
+		choice_num++; true_answer="";
+		html_code = html_code.substring(html_code.indexOf(pre_choice)); //jump to the next choice
+		choice_dummy = html_code.substring(0, html_code.indexOf(post_choice)); //add the choice to the result string. We'll take everything between the <li>-tags
+		if (choice_dummy.indexOf('true-answer') > -1) true_answer = correct_answer_indicator;	//if we find the text "true-answer" in this mess, this is the correct answer
+		choice_dummy = true_answer + choice_dummy.replace(/<[^>]*>?/gm, '').trim();	//remove all the HTML tags from the choice text
+		html_code=html_code.substring(html_code.indexOf(post_choice)+post_choice.length);	//move ahead by chopping the proccessed text off of the beginning of the string
+		result += choice_dummy+'\r\n';
+	}
+	result += '\r\n';
+}
+	result = result.replaceAll("&#39;", "'");    //replace html-' with normal '
+    result = result.replaceAll("&rsquo;", "'");    //replace html-' with normal '
+	return (result);
+}
+
+function unicodeToChar(text) {
+   return text.replace(/\\u[\dA-F]{4}/gi, 
+          function (match) {
+               return String.fromCharCode(parseInt(match.replace(/\\u/g, ''), 16));
+          });
+}
+
+//Converts Kahoot! JSON into question text
+function convert_kahoot(txt){
+	question_end = 0;
+    answer_start = 0;
+    answer_end = 0;
+	all_questions = "";
+    question_start = txt.indexOf('question":"');
+
+            while (question_start != -1)
+            {
+                txt = txt.substring(question_start+ 'question":"'.length);
+                question_end = txt.indexOf('","');
+                if (question_end == -1) break;
+                all_questions += txt.substring(0, question_end) + "\r\n";  //outputting a question
+
+                answer_start = txt.indexOf('answer":"');
+                while (answer_start != -1 && answer_start < question_start)  //cycle through the answers
+                {
+                    txt = txt.substring(answer_start+ 'answer":"'.length);
+                    answer_end = txt.indexOf("e}");    //we'll go this far to include the "correct: true/false"-part
+                    if (answer_end == -1) break;
+                    if (txt.substring(0, answer_end).indexOf('"correct":tru') > -1) all_questions += "*";      //this is a correct answer
+                    answer_end = txt.indexOf('","correct"');
+                    all_questions += txt.substring(0, answer_end) + "\r\n";
+                    answer_start = txt.indexOf('answer":"');
+                    question_start = txt.indexOf('question":"'); if (question_start == -1) question_start = answer_start + 1;
+                }
+                    question_start = txt.indexOf('question":"');
+					all_questions = unicodeToChar(all_questions);
+                all_questions += "\r\n";
+            }
+	
+	return(all_questions);
+}
+
+function kahoot_questions()
+{
+	var html_code='<div style="position:relative;">'+
+	'<button onclick="modal_close();" class="close_btn">&#10005;</button>'+
+	'<span class="modal_title">Import from Kahoot!</span><hr>'+
+	'<span><b>1. Paste the URL of a Kahoot!-quiz here (it must include the question code, e.g. https://create.kahoot.it/details/e4bee3c8-f6b6-4ee5-91db-2773abac59b4) and click OK</b></span><br>'+
+	'<input type="text" id="text_input" size="40">'+
+	'<center><button onclick="var link=\'https://create.kahoot.it/rest/kahoots/\'+$(\'#text_input\').val().substring($(\'#text_input\').val().lastIndexOf(\'/\'))+\'/card/?includeKahoot=true\';'+
+	' $(\'#kahoot_url\').append(link);$(\'#kahoot_url\').attr(\'href\', link);" class="menu_btn">OK</button>'+
+	'</center>'+
+	'<span><b>2. Click this URL. It will open in a new browser tab:</b></span><br>'+
+	'<span><a href="" target="_blank" id="kahoot_url"></a></span><br><br>'+
+	'<span><b>3. Paste the entire text from the new tab into the box below and click Convert.</b></span><br>'+
+	'<textarea rows="20" cols="80" noedit id="kahoot_text"></textarea>'+
+	'<center><button onclick="$(\'#kahoot_text\').val(convert_kahoot($(\'#kahoot_text\').val()));" class="menu_btn">Convert</button>'+
+	'</center>'+
+	'</div>';
+
+	$("#myModal-content").empty();
+	$("#myModal-content").append(html_code);	//insert the code into the document
+	modal_open();
+}
+
+function update_footer()
+{
+	const divider = "&nbsp;&nbsp;";
+	var html_code="";
+	var num_questions=0;
+	var num_categories=0;
+	var num_issues=0;
+	var all_checked = $('#tree').fancytree('getTree').getSelectedNodes();
+	for (var i=0;i<questionbank.length;i++)	{
+		if (questionbank[i].type == "category") num_categories++; else num_questions++;
+		if (questionbank[i].issue !=="") num_issues++;
+	}
+	if (questionbank[current_question].issue != "") html_code += '<span style="color:red;">Warning: '+questionbank[current_question].issue+'</span>';
+	html_code += "<br>Questions: "+num_questions+divider+"Categories: "+num_categories+divider+"Issues: "+num_issues+divider+"Selected (incl. categories): "+all_checked.length;
+	$("#footer").empty();
+	$("#footer").append(html_code);	//insert the code into the footer
+}
+
+//inserts a new empty question at the current position
+function new_question(type)
+{
+	if (current_question <0) return;
+	var question = {
+"type":"category",
+"category":"top",
+"name":"New question",
+"question_text":"Enter the text of your question here.",
+"tags":[],
+"choices": ["Enter the first choice here"],
+"feedback":[""],
+"value":["100"],
+"general_feedback":"",
+"default_grade":1,
+"penalty":0.33,
+"case_sensitive":false,
+"numbering":0,
+"shuffle_answers": true,
+"single_answer": true,
+"tolerance":[""],		
+"unitgradingtype":0,
+"unitpenalty":0,
+"showunits":0,
+"unitsleft":0,
+"unitname":["kg"],
+"multiplier":["1"],
+"subquestion_text":[""],
+"subquestion_answer":[""],
+"issue":"",
+"image_name":"default.png",	//for dragdropmarker-type
+"image_data":"",
+"drag_no":[1],
+"drag_text":["Your first marker"],
+"drag_noofdrags":["0"],
+"drop_no":[1],
+"drop_shape":["circle"],
+"drop_coords":["0,0;20"],
+"drop_choice":[0],
+};
+
+question.type=type;
+question.category=questionbank[current_question].category;
+if (type == "truefalse") {
+	question.choices[0]="true";
+	question.choices.push("false");
+	question.feedback.push("");
+	question.value.push("0");
+}
+if (type=="ddmarker") question.image_data="iVBORw0KGgoAAAANSUhEUgAAAMoAAAD5CAMAAABRVVqZAAAAYFBMVEXu7u7///+fn5/MzMzx8fF2dnb19fXt7e2ioqKkpKRycnJubm7CwsLJycmZmZmzs7Nra2vV1dWrq6u3t7fb29u8vLzDw8Pi4uLf39+FhYXR0dGVlZVnZ2d/f3+MjIyAgIALUUx6AAAPeElEQVR4nO2dibaiTK+GGYpCmWfYOPT93+WfNwUKgtuWQpvzHbJ6dbMRMY9JZSq3bZimNP7vi5CmaZiG+6/1WENcYRryP0FCLP8F5+pE/GsF1pMdZYuyo2xRdpQtyo6yRdlRtig7yhZlR9mi7ChblB1li7KjbFF2lC3KjrJF2VG2KDvKFmVH2aLsKFuUHeWVuPTn23ucH0FxpUki5XdxPoGiSFik+B7NR6xiDgU0X8H5AAobJbVrOcD5hqt9AgW6l0FQhoUwv+hqH0JpApYySN0BzWeN8wEUmCIMblKGjfyKcdZH4aVSKpsEs8b5UBz4AAppW4MidNuyvBvn43FgfRT4V4tVX9OBKKo7TlkVxgddbXUU5V9A6VWuB8Ypg7b+VBxYH4VUNEqSapAm3SIY4HwoDqzvYKReAZRilPNN2YTlszggV4kDq6PgDScTlLkwJ+KmwQfjwNooWCoyh1WmJBAxMs6qcWB1FIRioLTzKJBRHCiHcUDLOGujcKqHf9XPQFiMUZAOm3GxtvCl1yXhUAyj5L+SsMq1/TQOLIJZG4UUcQklr54iDOVZHFjEsraDkR5pTtL8FYr5LA4seemVUTjVE0ksfwcYSz0q1lJz2Wfr10XhriuGVd4hYTPc4wDC+BIPWx+lAMovofipIA4AJaTjJWqti4KYWsG/3KmmojV/D9Cm6qMDLLN/vuw5FMMo8VTLOmzN8tUKclFRy02gQGWgjEMxr6DQLsw8fIGSwirmJoIxaWETSjwIxaIIQ7OVph02Zpy9cLGyC2CLXnxNFOVf8TAU13Zo26kZkMeFtZnFM543EAEUd6F/rYsCbWKSPhRLgNg2mSMuqbaShFLx2ndnwoKp+px8qX+tjpICJVWauQxihwYYaDW7eCyrQFjMolBqKZeG4lVRBKd6aKve80KR2CGlGpxt7M5iNnxuTlCHLg3F66EI6dpwnQxKswOlHQkiV9xJFgdMYttzOQZ9Ti6X+tcqKELIOsyiE2nRAKUy2zBsa7fpUXqQCim0s1Q6zTF213wu/P0zbRQhjLS0IsuyMtIiZE8yYZCQMkna3lGyUJqy6WwVyjqbRDMYZXEo1kSBOew4AodlRfbdv3rf6qxSF3YAEEox3blQiCx7sAv3OYtDsQ6KEKIIjh0HUEgLN+OFXdgjEWo/Lx0Ahi5RP/Q0aa4Tihej0Cpv8zsGC2nREkqWmuEYpSrkGIRQkC8fOk30OctD8UIUXuVjDstC7RQDxZBjFCr4RfpAF0rjMfVzn1Mv968lKKLOHjHgX+QuMoNQETxGMdoHEARj5NKRhzVd87n4F4EXoNQzIIRC2hQgoeLxQe0pSJ9rhighoWiE4iUoMp4jsaBWCZT6canMSOiilrlVOCwoQ1MN/1qA4s4bBS3wkUiOD6F4HsVsVK4ZhGKgGN9FaeZRKJHXQMnN9CUJRQI7U2nzhtLGqvlc/jvz76PML5UDvB3+NQnFs1YRZlqTNPcKOY/z2F6e6hehiNmlghwBkqMQcyhUk6Vp2+KAJB21K1J2oTjWCcWLUPI5/yItxJFDcTODEs41wjXDSbMKqTkrupWj8Z0MC1DSuayCwoNQjqE5vzam0sXoFuwp9zmlRqpfhDIbwlA75fCv+VB8Q5GSSjdhuG5xKywNM+SKLI4LLf9agiKzqVGQEA6EcnhM9Z2+XRHsVmEngwfNmhp+VDzi6yginKKg64J/PQvFfS4spqBkkpb7HL1QvKycnIbjI2kRHEmKJ6E47GPWY13JZlF9jl4oXoYiD49GQaYDiSXd3nfCodj38DvDknKfk+mF4mUoonxEQddlEUpmTjr2yYnHYhNlDPc5mv61DOUxHCMU2wdCsWeC7kQmZinQ52SBXihe2kU+oCAhZPCv+aHjC7OokV+mGYoXoohxnR+RFhL+dQz+gmVSOFOZjDJBp+vSQLFHZuGui1EoHpTPN1SlNOpi2oilZkAkHIp1SBY62DgcY8GWWCodTdzePu4ha56FDWLZdNHX3OegINAiWYgij0OjYLFbPYrCOVaqgJxV/gFFukDRGIBpoYhgiEI2qK0DyYjGyjFLlXX7iobaMDSfuktlKUox9DC8+4wyock4y1Pt+AtOw32OdihePtIboECLY48yxeHPuD03TigkirflexHaKPf+C12XBNnhKU3GccBNZ1e96nO0Q/FylPY+KyYt+/T/hOYWB0RjP+Kk3OfE+v61ePx977+gxSBlPqfp48DIOLSYqM85tvr+tRjl1n9x1zUuZJ7REE7GXf4gDoQ8cjrqh+LlKLf+C6F4ZjT2i3HKYhCkW7M6rhKKNfZXevUxyytOE5QXxrHdLg7U3OdU2qleB6Ufh2GCT935YbJJ8YLmEMDVDGlQ8XZYIRTroPT9Vzf3FW38Lo0VUxyw6dBaw780UPoAHN0/UdyU1hzO4RecI06sEYq1tlV7paPDvRI2XTs7vWUcAGntRayAMhiHkSmq+yhVFo+7lC9oLM0BmDaKCMf9VxQPPlVQh8dXrjZg0e66NFGm47AoOob3jlims3FgSnMI1wjFWiiTcRjTRMPf9miCl3GA/Et3AKaPMuq/RjjZOA68oFknFOuhFLP7X4rGCl7GgZ4kXyUU633GRTxFUTiv4wCjrBOKNVHmt72HNMfBftd8HDhEK3Rd+ijtr2bpcfJiYJxpHFgpFGt+iGp+C38CczoOP8dmtOM4sFIo1kQZjcOecFDv6PJvcckBTlFGPU60RteljyKqF76VVQ22HpW4rhjQuF0ciFYKxbofOJz/ZEXHEbdkjvH1MM6dBnHgpLktPBC9u8x/HIEwDkFxN8dI3LFxOMCt8+uqmigzH0cgtwprOc/RyZhmJf/SRZnsf1llOnGrORnEgbX+UwvdOe3zVf5aYBy5+Ncgp7poPv02eJlb5a9lze9D0J5u1pTwouPTVf5F0X996TYvVvmXZAMqrCU7yhZlR9mi7ChblB1li7KjbFF2lC3KjrJF2VG2KDvKFmVH2aLsKFuUHWWLsqNsUXaULcqOskV5F0WSqCfKfo8Lu3DycYdFqoelHF82uMvgenUHdaY7Hl/wCRRxiqJTjYM8imJ+srStP57zkzXDD6o0p+jUCkNG2BLjB+QRx+oaF3ep+pcWbn660B2sysVG7SlScgrf1e29y+XZ83yLFJKW70Mx4f4knuPRn+R4ZxFF4iUBoXgk50Zg0/KMY75EVAkdXrrLZZng6SS+Iw0R4jFIUn4YJXEcJyHdpOV5/B47pIYTXX3HYcQexXd8etslXe14YJQHD8fKQFccJoUyaka39J1T9OP7RCds3CkhOedfQPGuskeRRw+qSun+IeXam88MUZwE/xtL4txQaj72MvwgUvrBs3kdVVeF4rfYOX5773gJCnTurUI//2GVSD/v1JtliHLyvFyI2PNOHQodO5eA3gKOCyfPSdI+khgKJVVfMPBxFC/2nR+pUETrO57yaXiNP2MVr7oQgXCcS+UpFHkhi5CVfBtriN6LHwZU2gPFqwqS9PNW8duD54cdSunRz53P09tbz6GUdHnoe2WHApdKCnlVVm0S5Wn8/QhVrdaK55Ocv4ASwu8HKKnKB0BpZlAC4TvXK1ksUChYXhcpAh9rCBd6FNRFcYb2oVAoHPi+gUIG8IMjo5BC7CdKw1mrBLAX3voORdAqySkBKtfEEqMIRygIZArFO/I373wDRbiklLJKijdVRdgf0ndm2RMKIlZSdygipLed0qDl8CKR9BNnGKFu/dVlj9fLfaQT8nWBbIFXlbQCPGsWRciT759k52AIWexBKkGRozp+IO+3ZhQhFrAsQjEEJwagAOpaS9l2qXMOhYqRE2mnULDQunzOC55NFruUVm4oXpBCio+nSEapfIVCMZiOyCD4O5/L9oSiSk+FInIsKWREM1IOV53pIvDQn37ZI4IlJ/mbJvooZy9BmSf/+J7PryWOqmjyvWpYg51VDebfSylBtZYv5cX3f1QlZifemUIGGdRXd0iuzaAG8z+MIuI8LljXOM9VbSvr0jqdjtXoVjWuI0vgm9h6lJSeIvCNZn19Q4ecJWWbRacoC2rozl8dzvLhytjoV+NwXYqZ7qJ7eLh6u3Q+eN79ZsO+5ibvqvbm9RuWHWWLsqNsUXaULcqCvHJLLINz48dGp+affssfjzcZPvZeankTxUWdh0aioX+7c/XgVJfaBapB+re4nVHS3KtE0aqasVapETduhpcpeadneQ9F5NTsnUvUk2f/3HXCUeInXJYlty5W0inMY+ih86CSks7gErSNqBodngy6dL+sz/fHRD3mn9+pjt9DkX8c1TFxL9i1J77qAxueK6nhlVSPohnxBkUmBkXUnahLUOwnCSpqzMnchBtjdV3m9U3xx1BEoWZHGOlR/+vzOar3MZ1D2+t1k6QnKDw0c5yr7FC8g1unF7qfMUXxuKKM60cV1kKButcrd0ygQkdCDYvHHS1aE7T3/D4+sQrZ79BPAKRq6mWuTjyiJPKzyx5eVZbd4OSiRniYM5BXYSKWuD/dzHEWBV19Qv2nUlny1AjzNAcrbYoiB5P/1VHQ4SV1nfDoi9tBV/1TG6z1FW+x99Qq1NUTfNYP9jDLsyyyqV/OoJD1Sd7qvt5BkRHUlT9qwcMcpcBPcH4XsyDMVniWNIuCgWQlyTETBGge2fo+XXASxgwKTw8un0LBywVSlmrBY5H8yKZr9nlCx2Dc8c+gwH4+NVnkmAepUP6cTlfMbtwZFJ7mOx9C4VGknabk8gio7Pp17PGkGBPjH0qIGXvdLAoC+bVIi0P3jG6tYKBBDN9dKxjaOUhcjgqoCEh59x7Xyl18vJ2lmENRgby7BMOYpNt4UeFjgvJ+cfj3z+AcqJKwo1a62v2B52OfQT3mqZnjAMVUG4ucd7pLeIOGrSIkMmykUPLOEgOrvBWV/v5KegFffeNiN7JOb9s/2Ee58kM8BBcDFOcHcglx6sSXqOEy1sq1LOOLsiMmfRd1qeS1wsd/go9ke+TAEycunpV2ADcoP+TH8O5mIxS18RW22M3iS1Qm4sLFxwQsuYrbrhiKGXmLYCpOr44ibBWrjK5WYbfqXc3yPL8DpuThCGynjlB8O+o3VRH6KMrKTvdLxKPAMYr/URSedonx4W0r/mFL/nbitgcvH3ftB4+J28k+ai3bu/9/3EVuWHaULcqOskXZUbYoO8oWZUfZouwoW5QdZYuyo2xRdpQtyo6yRdlRtig7yhZlR9mi7ChblB1li7KjbFF2lC3KjrJF2VG2KDvKFuU/hbLW19T/a3GlYRr/CRZXmMZK/5HLPxb8zw7/A1rBDL7QoqmFAAAAAElFTkSuQmCC";
+questionbank.splice(current_question,0,question);
+display_questionbank();
+//current_question++;
+show_question(current_question);
+}
+
+function show_menu_info(element)
+{
+document.getElementById("main_menu_info").innerHTML=element.dataset.info;
+}
+
+</script>
+</head>
+
+
+<body>
+	<div id="header">
+		<div id="logo">
+	QUIZMAKER v0.0.8<br><span style="font-size:12px;">&copy; Thomas Lornsen</span>
+		</div>
+		<div id="main_menu_info"></div>
+
+		<div id="main_menu">
+			<button onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Open an existing file (Moodle-XML)"><label for="fileinput" ><img src="icon-open-file.png"></label>
+			<input type="file" id="fileinput"></button>
+			<script>document.getElementById('fileinput').addEventListener('change', load_file, false);</script>
+			<button onmouseover="show_menu_info(this);" onclick="new_file()" onmouseout='document.getElementById("main_menu_info").innerHTML=""' value="new_file" data-info="Start a new question bank"><img src="icon-new-file.png"></button>
+			<button onclick="save_file(false)" onmouseover="show_menu_info(this);" value="download_all_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Download all questions as Moodle XML"><img src="icon-download.png"></button>
+			<button onclick="save_file(true)" onmouseover="show_menu_info(this);" value="download_selected_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Download the selected questions as Moodle XML"><img src="icon-download-selected.png"></button>
+			&nbsp;&nbsp;
+			<div class="dropdown">
+				<button class="dropbtn" onmouseover="show_menu_info(this);" value="new_question" id="new_question" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Insert a new empty question"><img src="icon-new-empty.png"></button>
+				<div class="dropdown-content">
+				<a href="#" onclick='new_question("multichoice")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Multiple Choice-question.">Multiple Choice</a>
+				<a href="#" onclick='new_question("shortanswer")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Shortanswer-question.">Shortanswer</a>
+				<a href="#" onclick='new_question("truefalse")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new True/False-question.">True/False</a>
+				<a href="#" onclick='new_question("essay")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Essay-question.">Essay</a>
+				<a href="#" onclick='new_question("cloze")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new CLOZE-question.">Cloze</a>
+				<a href="#" onclick='new_question("matching")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Matching-question.">Matching</a>
+				<a href="#" onclick='new_question("numerical")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Numerical-question.">Numerical</a>
+				<a href="#" onclick='new_question("description")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new Description-item.">Description</a>
+				<a href="#" onclick='new_question("ddwtos")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new 'Drag&Drop into Text'-question.">Drag&Drop into Text</a>
+				<a href="#" onclick='new_question("ddmarker")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new 'Drag&Drop Marker'-question.">Drag&Drop Marker</a>
+				</div>
+			</div>
+			<button onclick="show_sandbox()" onmouseover="show_menu_info(this);" value="import_questions" id="import_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Bulk-import questions"><img src="icon-add.png"></button>
+			<button onclick="delete_questions()" onmouseover="show_menu_info(this);" value="delete_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Delete all checked questions"><img src="icon-trash.png"></button>
+			<button onclick="new_category()" onmouseover="show_menu_info(this);" value="new_category" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="New folder"><img src="icon-new_folder.png"></button>			
+			&nbsp;&nbsp;<button onclick="bulk_edit()" onmouseover="show_menu_info(this);" value="bulk_edit" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Edit all selected questions"><img src="icon-edit.png"></button>
+			&nbsp;&nbsp;<button onclick="display_selected_as_text()" onmouseover="show_menu_info(this);" value="display_as_text" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="View the selected questions as text and print them."><img src="icon-text.png"></button>
+			<button onclick="export_selected()" onmouseover="show_menu_info(this);" value="export" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Export the selected questions"><img src="icon-export.png"></button>
+			<button onclick="search()" onmouseover="show_menu_info(this);" value="search_all_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Search all questions"><img src="icon-search.png"></button>
+			<button onmouseover="show_menu_info(this);" value="show_documentation" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Download documentation (PDF)"><a href="quizmaker-documentation.pdf" target="_blank"><img src="icon-help2.png"></a></button>
+		</div>
+	</div>
+
+<div id="main">
+	<div id="sidebar_wrapper"></div>
+
+		<div id="tree_wrapper" >
+			<div id="tree" ><ul id="treeData" styleXXX="display: none; min-height:800px;"></ul></div>
+		</div>
+	
+		<div id="active_question"></div>
+</div>
+
+<div id="footer">&nbsp;</div>
+	<div id="alert-box"></div>
+
+	<div id="myModal" class="modal">
+
+		<!-- Modal content -->
+		<div class="modal-content" id="myModal-content">
+
+		</div>
+	  
+	  </div>
+
+</body>
+</html>
