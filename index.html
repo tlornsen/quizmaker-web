@@ -2894,7 +2894,7 @@ var result="";
 var indexStart=textArea.selectionStart;
 var indexEnd=textArea.selectionEnd;
 var rawtext=text.substring(indexStart, indexEnd);
-const choice_numbering=["A)", "B)", "C)", "D)", "E)", "F)", "G)", "H)","A]", "B]", "C]", "D]", "E]", "F]", "G]", "H]","A. ", "B. ", "C. ", "D. ", "E. ", "F. ", "G. ", "H. ", "a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)"]
+const choice_numbering=["A) ", "B) ", "C) ", "D) ", "E) ", "F) ", "G) ", "H) ","A] ", "B] ", "C] ", "D] ", "E] ", "F] ", "G] ", "H] ","A. ", "B. ", "C. ", "D. ", "E. ", "F. ", "G. ", "H. ", "a) ", "b) ", "c) ", "d) ", "e) ", "f) ", "g) ", "h) "]
 if (rawtext=="") {alert("Please select some text."); return "";}
 var lines = [];
     $.each(rawtext.split(/\n/), function(i, line){	//split the text into lines
@@ -2915,15 +2915,17 @@ var lines = [];
 
 for (var i=0;i<lines.length; i++)
 	{
-		lines[i] = lines[i].replaceAll('\r\n', "");
+		//lines[i] = lines[i].replaceAll('\r\n', "");
 		lines[i] = lines[i].trim();	//remove leading and trailing spaces
-		lines[i] = lines[i].replace(/^\d+\.\s*/, '\r\n'); //remove leading numbering (e.g. "10. blabla")
-		lines[i] = lines[i].replace(/^\d+\)\s*/, '\r\n'); //remove leading numbering (e.g. "10) blabla")
-		for (var k=0;k<choice_numbering.length;k++) lines[i] = lines[i].replaceAll(choice_numbering[k],'');	
+		lines[i] = lines[i].replace(/^\d+\.\s*/, '[newquestion]'); //remove leading numbering (e.g. "10. blabla")
+		lines[i] = lines[i].replace(/^\d+\)\s*/, '[newquestion]'); //remove leading numbering (e.g. "10) blabla")
+		for (var k=0;k<choice_numbering.length;k++) lines[i] = lines[i].replaceAll(choice_numbering[k],'[newchoice]');
 	}
 
 	result = lines.join("\r\n");	//join the lines
-	result = result.replace(/\n\s*\n/g, '\r\n\r\n');
+	//result = result.replace(/\n\s*\n/g, '\r\n');
+	result = result.replaceAll('[newquestion]', '\r\n');
+	result = result.replaceAll('[newchoice]', '\r');
 
 	lines = [];
 	$.each(result.split(/\n/), function(i, line){	//split the text into lines again, but preserve the linebreaks we've inserted
