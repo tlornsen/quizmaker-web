@@ -11,14 +11,6 @@
 	<script src="fancytree/src/jquery.fancytree.js"></script>
 	
 <script type="text/javascript">
-//To do:
-//- feature: bulk-edit
-//- feature: search
-//- feature: copy and paste questions
-//- move questions (drag/drop)
-//- export: as text, etc.
-//- remove leading numbers/clean up formatting
-//
 //Moodle stores questions sequentially like this:
 //1.question (type=category)
 //2. question
@@ -71,7 +63,6 @@ var question_categories=[];	//we'll keep track of the categories in this array
 var answer_numbering = ["none", "abc", "ABCD", "123"];
 var char_numbering_lower = "abcdefghijklmnopqrstuvwxyz";
 var char_numbering_upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-var sidebar_visible=true;
 var current_question=-1;
 var current_file="";
 var del_tags =["<p>", "</p>", "<b>", "</b", "<i>", "</i>", "<pre>", "</pre>"];
@@ -97,7 +88,21 @@ var settings_search_tags = true;	//search the tags?
 var settings_search_casesensitive = true;
 var settings_search_wholewords = false;
 var settings_search_onlyissues = false;
-var sandbox_instructions='**INSTRUCTIONS**\r\n1. Enter questions here\r\n2. Select multiple questions of the same type\r\n3. Select the correct question type in the dropdown-menu below\r\n4. Adjust the settings and click "Import" to insert the questions to the questionbank at the current position.\r\n\r\n**EXAMPLES**\r\nThis is a multiple choice question text with 5 choices.\r\nThis is choice 1\r\nThis is choice 2\r\nThis is choice 3\r\nThis is choice 4\r\nThis is choice 5\r\n\r\nThis is another a multiple choice question text with 3 choices.\r\nThis is another choice 1\r\nThis is another choice 2\r\nThis is another choice 3\r\n\r\nThis could be a shortanswer question.\r\nAnswer\r\nAnother answer\r\n\r\nThis could be a shortanswer question with (answer1/answer2) embedded answers.\r\nUse "(/)" to extract them.\r\nThis could be a True/False question.\r\nAnswer: True\r\n\r\nThis could be a matching question:\r\nFruits or veggies?\r\nApples,Fruit\r\nBananas,Fruit\r\nCabbage,Veggie\r\nTomato,Veggie';
+
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll('.tab-button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Update tab buttons
+      document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Toggle content areas
+      document.querySelectorAll('.tab-content').forEach(p => p.style.display = 'none');
+      const tab = btn.getAttribute('data-tab');
+      document.getElementById('tab-' + tab).style.display = 'block';
+    });
+  });
+});
 
 function new_file(){
 current_question=0;
@@ -2029,23 +2034,6 @@ for (var i=0; i<question_categories.length; i++)	//let's create the categories f
 	}
 }
 
-function show_sidebar(yes)
-{
-	if (yes)
-	{
-		document.getElementById("sidebar_wrapper").style.width = "calc(100% - 45% - 25%)";
-  		document.getElementById("main").style.marginLeft = "calc(100% - 45% - 25%)";
-	}
-	else 
-	{
-		document.getElementById("sidebar_wrapper").style.width = "0";
-  		document.getElementById("main").style.marginLeft = "0";
-		$("#sidebar_wrapper").empty();
-	}
-	sidebar_visible=yes;
-}
-
-
 function alert_box(text)
 {
 	$( "#alert-box").html(text);
@@ -2246,7 +2234,6 @@ function save_file(only_selected)
 
 //initialize everything on load
 $(function () {
-	show_sandbox();
 	show_no_question_selected();
 	new_file();
 });
@@ -3014,33 +3001,9 @@ function store_search_parameters()
 	settings_search_onlyissues = $("#search_option_onlyissues").prop('checked');
 }
 
-function search()
+function show_search()
 {
-	if (sidebar_visible) $("#sidebar_wrapper").empty();
-	var html_code='<div style="position:relative; margin:auto; width:95%")><button onclick="store_search_parameters();show_sidebar(false);" class="close_btn">&#10005;</button>'+
-	'<span class="modal_title">Find text</span><hr>'+
-	'<label for="search_text">Find: </label> <input type="text" id="search_text" size="30" value="'+settings_search_searchterm+'"><br><br>'+
-	'<label for="search_option_name">Names:</label><input type="checkbox" id="search_option_name" ';
-	if (settings_search_name) html_code +="checked";
-	html_code+='>&nbsp;&nbsp;<label for="search_option_text">Question text:</label><input type="checkbox" id="search_option_text" ';
-	if (settings_search_text) html_code +="checked";
-	html_code+='>&nbsp;&nbsp;<label for="search_option_choices">Choices:</label><input type="checkbox" id="search_option_choices" ';
-	if (settings_search_choices) html_code +="checked";
-	html_code+='>&nbsp;&nbsp;<label for="search_option_tags">Tags:</label><input type="checkbox" id="search_option_tags" ';
-	if (settings_search_tags) html_code +="checked";
-	html_code+='>&nbsp;<br>'+
-	'<label for="search_option_casesensitive">Case sensitive:</label><input type="checkbox" id="search_option_casesensitive" ';
-	if (settings_search_casesensitive) html_code +="checked";
-	html_code+='>&nbsp;&nbsp;<label for="search_option_wholewords">Whole words only:</label><input type="checkbox" id="search_option_wholewords" ';
-	if (settings_search_wholewords) html_code +="checked";
-	html_code+='><br><label for="search_option_onlyissues">Only questions with issues:</label><input type="checkbox" id="search_option_onlyissues" ';
-	if (settings_search_wholewords) html_code +="checked";
-	html_code+='><center><button onclick="store_search_parameters(); output_search_results(find_text());" class="menu_btn">Search</button>'+
-		'<br>You can click the search results to open them in the question bank.<br>'+
-	'<div id="search_results" style="position:relative; width: 100%; height: 200px; overflow-y: auto; margin: auto;"></div>'+
-	'<button onclick="check_questions(find_text());" class="menu_btn" id="search_select_results_btn" style="display:none;">Select results</button></center></div>';
-	$("#sidebar_wrapper").append(html_code);	//insert the code into the document
-	show_sidebar(true);	
+document.querySelector('.tab-button[data-tab="search"]').click();
 }
 
 function limit_length_to(s, len) {
@@ -3049,32 +3012,7 @@ function limit_length_to(s, len) {
 
 function show_sandbox()
 {
-	if (sidebar_visible) $("#sidebar_wrapper").empty();
-var html_code='<div style="position:relative; margin:auto; width:90%;"><button onclick="show_sidebar(false);" class="close_btn">&#10005;</button>'+
-		'<span class="modal_title">Import</span><hr>'+
-		'<div id="sandbox_menu_buttons"><button onclick=\'kahoot_questions(document.getElementById("sandbox").value)\'><a href="#" class="tooltip"><img src="icon-kahoot.png"><span>*EXPERIMENTAL*</span></a></button>'+
-		'<button onclick=\'document.getElementById("sandbox").value=sparknotes_questions(document.getElementById("sandbox").value)\'><a href="#" class="tooltip"><img src="icon-sparknotes.png"><span>*EXPERIMENTAL*<br>Importing from Sparknotes:<br>1. Use Google Chrome and find a quiz on Sparknotes.<br>2. Find the quiz you want to import.<br>3. In Chrome, open the top right menu, go to "More Tools > Developer Tools"<br>4. In the "Elements"-tab, hover over the initial HTML-tag and right-click. Select "Copy > Copy outerHTML"<br>5. Paste the text into the field below and click this button.</span></a></button>'+
-		'<button onclick="magic_formatting()" value="magic_formatting"><a href="#" class="tooltip"><img src="icon-magic-wand.png"><span>Magic Formatting:<br>- Trim spaces<br>- Remove all numbering<br>- separate text and choices into separate lines</span></a></button></div>'+
-		'<textarea id="sandbox">'+sandbox_instructions+
-		'</textarea><br>'+
-		'<label for="select_questiontype" title="Choose the type of question you would like to import into the questionbank.">Questiontype:</label>'+
-		'<select id="select_questiontype" onchange="display_import_settings()">'+
-		'<option value="-">-</option>'+
-		'<option value="multichoice">Multiple Choice</option>'+
-		'<option value="shortanswer">Shortanswer</option>'+
-		'<option value="truefalse">True/False</option>'+
-		'<option value="essay">Essay</option>'+
-		'<option value="matching">Matching</option>'+
-		'<option value="numerical">Numerical</option>'+
-		'<option value="cloze">Cloze</option>'+
-		'<option value="description">Description</option>'+
-		'<option value="ddwtos">Drag and Drop into Text</option>'+
-		'</select>'+
-		'<button onclick="bulk_import()" value="import" class="menu_btn">Import</button>'+
-		'<div id="import_settings">'+
-		'</div></div>';
-	$("#sidebar_wrapper").append(html_code);	//insert the code into the document
-	show_sidebar(true);	
+document.querySelector('.tab-button[data-tab="bulk-create"]').click();
 }
 
 //converts the selected questions into the Kahoot-format and updates the respective fields in the export-modal
@@ -3365,7 +3303,7 @@ function kahoot_questions()
 	'</center>'+
 	'<span><b>2. Click this URL. It will open in a new browser tab:</b></span><br>'+
 	'<span><a href="" target="_blank" id="kahoot_url"></a></span><br><br>'+
-	'<span><b>3. Paste the entire text from the new tab into the box below and click Convert.</b></span><br>'+
+	'<span><b>3. Paste the entire text from the new tab into the box below and click Convert. Then paste the text from there into the sandbox and use the multiple choice option to import it into the question bank.</b></span><br>'+
 	'<textarea rows="20" cols="80" noedit id="kahoot_text"></textarea>'+
 	'<center><button onclick="$(\'#kahoot_text\').val(convert_kahoot($(\'#kahoot_text\').val()));" class="menu_btn">Convert</button>'+
 	'</center>'+
@@ -3462,7 +3400,7 @@ document.getElementById("main_menu_info").innerHTML=element.dataset.info;
 <body>
 	<div id="header">
 		<div id="logo">
-	QUIZMAKER v0.0.8<br><span style="font-size:12px;">&copy; Thomas Lornsen</span>
+	QUIZMAKER v0.0.9<br><span style="font-size:12px;">&copy; Thomas Lornsen</span>
 		</div>
 		<div id="main_menu_info"></div>
 
@@ -3489,19 +3427,100 @@ document.getElementById("main_menu_info").innerHTML=element.dataset.info;
 				<a href="#" onclick='new_question("ddmarker")' onmouseover="show_menu_info(this);" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Add a new 'Drag&Drop Marker'-question.">Drag&Drop Marker</a>
 				</div>
 			</div>
-			<button onclick="show_sandbox()" onmouseover="show_menu_info(this);" value="import_questions" id="import_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Bulk-import questions"><img src="icon-add.png"></button>
 			<button onclick="delete_questions()" onmouseover="show_menu_info(this);" value="delete_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Delete all checked questions"><img src="icon-trash.png"></button>
 			<button onclick="new_category()" onmouseover="show_menu_info(this);" value="new_category" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="New folder"><img src="icon-new_folder.png"></button>			
 			&nbsp;&nbsp;<button onclick="bulk_edit()" onmouseover="show_menu_info(this);" value="bulk_edit" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Edit all selected questions"><img src="icon-edit.png"></button>
 			&nbsp;&nbsp;<button onclick="display_selected_as_text()" onmouseover="show_menu_info(this);" value="display_as_text" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="View the selected questions as text and print them."><img src="icon-text.png"></button>
 			<button onclick="export_selected()" onmouseover="show_menu_info(this);" value="export" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Export the selected questions"><img src="icon-export.png"></button>
-			<button onclick="search()" onmouseover="show_menu_info(this);" value="search_all_questions" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Search all questions"><img src="icon-search.png"></button>
 			<button onmouseover="show_menu_info(this);" value="show_documentation" onmouseout='document.getElementById("main_menu_info").innerHTML=""' data-info="Download documentation (PDF)"><a href="quizmaker-documentation.pdf" target="_blank"><img src="icon-help2.png"></a></button>
 		</div>
 	</div>
 
-<div id="main">
-	<div id="sidebar_wrapper"></div>
+<div id="main" style="margin-left: calc(100% - 45% - 25%)">
+	<div id="sidebar_wrapper" style="width: calc(100% - 45% - 25%)">
+	<div id="sidebar-tabs">
+  <div class="tab-header">
+    <button class="tab-button active" data-tab="search">🔍 Search</button>
+    <button class="tab-button" data-tab="bulk-create">📋 Bulk Create</button>
+  </div>
+
+  <div class="tab-content" id="tab-search">
+		<div style="position:relative; margin:auto; width:95%")>
+		<label for="search_text">Search: </label> <input type="text" id="search_text" size="30" value=""><br><br>
+		<label for="search_option_name">Names:</label><input type="checkbox" id="search_option_name" checked>&nbsp;&nbsp;
+		<label for="search_option_text">Question text:</label><input type="checkbox" id="search_option_text" checked>&nbsp;&nbsp;
+		<label for="search_option_choices">Choices:</label><input type="checkbox" id="search_option_choices" checked>&nbsp;&nbsp;
+		<label for="search_option_tags">Tags:</label><input type="checkbox" id="search_option_tags" checked>&nbsp;<br>
+		<label for="search_option_casesensitive">Case sensitive:</label><input type="checkbox" id="search_option_casesensitive" checked>&nbsp;&nbsp;
+		<label for="search_option_wholewords">Whole words only:</label><input type="checkbox" id="search_option_wholewords"><br>
+		<label for="search_option_onlyissues">Only questions with issues:</label><input type="checkbox" id="search_option_onlyissues">
+		<center><button onclick="store_search_parameters(); output_search_results(find_text());" class="menu_btn">Search</button>
+		<br>You can click the search results to open them in the question bank.<br>
+		<div id="search_results" style="position:relative; width: 100%; height: 200px; overflow-y: auto; margin: auto;"></div>
+		<button onclick="check_questions(find_text());" class="menu_btn" id="search_select_results_btn" style="display:none;">Select results</button></center></div>
+	</div>
+
+  <div class="tab-content" id="tab-bulk-create" style="display: none;">
+	<div style="position:relative; margin:auto; width:90%;">
+		<div id="sandbox_menu_buttons"><button onclick='kahoot_questions(document.getElementById("sandbox").value)'><a href="#" class="tooltip"><img src="icon-kahoot.png"><span>*EXPERIMENTAL*</span></a></button>
+		<button onclick=\'document.getElementById("sandbox").value=sparknotes_questions()\'><a href="#" class="tooltip"><img src="icon-sparknotes.png"><span>*EXPERIMENTAL*<br>Importing from Sparknotes:<br>1. Use Google Chrome and find a quiz on Sparknotes.<br>2. Find the quiz you want to import.<br>3. In Chrome, open the top right menu, go to "More Tools > Developer Tools"<br>4. In the "Elements"-tab, hover over the initial HTML-tag and right-click. Select "Copy > Copy outerHTML"<br>5. Paste the text into the field below and click this button.</span></a></button>
+		<button onclick="magic_formatting()" value="magic_formatting"><a href="#" class="tooltip"><img src="icon-magic-wand.png"><span>Magic Formatting:<br>- Trim spaces<br>- Remove all numbering<br>- separate text and choices into separate lines</span></a></button></div>
+		<textarea id="sandbox" rows="20" style="width: 100%;">
+**INSTRUCTIONS**
+1. Enter questions here
+2. Select multiple questions of the same type
+3. Select the correct question type in the dropdown-menu below
+4. Adjust the settings and click "Import" to insert the questions to the questionbank at the current position.
+
+**EXAMPLES**
+This is a multiple choice question text with 5 choices.
+This is choice 1
+This is choice 2
+This is choice 3
+This is choice 4
+This is choice 5
+
+This is another a multiple choice question text with 3 choices.
+This is another choice 1
+This is another choice 2
+This is another choice 3
+
+This could be a shortanswer question.
+Answer
+Another answer
+
+This could be a shortanswer question with (answer1/answer2) embedded answers.
+Use "(/)" to extract them.
+
+This could be a True/False question.
+Answer: True
+
+This could be a matching question:
+Fruits or veggies?
+Apples,Fruit
+Bananas,Fruit
+Cabbage,Veggie
+Tomato,Veggie
+</textarea><br>
+		<label for="select_questiontype" title="Choose the type of question you would like to import into the questionbank.">Questiontype:</label>
+		<select id="select_questiontype" onchange="display_import_settings()">
+		<option value="-">-</option>
+		<option value="multichoice">Multiple Choice</option>
+		<option value="shortanswer">Shortanswer</option>
+		<option value="truefalse">True/False</option>
+		<option value="essay">Essay</option>
+		<option value="matching">Matching</option>
+		<option value="numerical">Numerical</option>
+		<option value="cloze">Cloze</option>
+		<option value="description">Description</option>
+		<option value="ddwtos">Drag and Drop into Text</option>
+		</select>
+		<button onclick="bulk_import()" value="import" class="menu_btn">Import</button>
+		<div id="import_settings">
+		</div></div>
+  </div>
+</div>
+	</div>
 
 		<div id="tree_wrapper" >
 			<div id="tree" ><ul id="treeData" styleXXX="display: none; min-height:800px;"></ul></div>
