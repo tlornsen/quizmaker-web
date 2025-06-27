@@ -81,6 +81,7 @@ var settings_text_rows_per_page=5;
 var settings_text_title="Quiz made using Quizmaker";
 //the settings for the search
 var settings_search_searchterm = "";
+var settings_search_replaceterm = "";
 var settings_search_name = true;	//search the question name?
 var settings_search_text = true;	//search the question text?
 var settings_search_choices = true;	//search the choices?
@@ -2956,6 +2957,55 @@ for (var i=0; i<result_list.length; i++)
 	$("#search_select_results_btn").append("Select all "+result_list.length+" results");
 	$("#search_select_results_btn").show();
 	
+	$("#replace_btn").empty();	//delete any previous search results
+	$("#replace_btn").append("Replace in "+result_list.length+" results");
+	$("#replace_btn").show();
+	
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replace_text(result_list) {
+  const replacement = $("#replacement_text").val();
+  const searchTerm = settings_search_searchterm;
+  const useWholeWords = settings_search_wholewords;
+
+  // Build pattern: either exact match or whole word with word boundaries
+  const pattern = new RegExp(
+    useWholeWords ? `\\b${escapeRegExp(searchTerm)}\\b` : escapeRegExp(searchTerm),
+    settings_search_casesensitive ? "g" : "gi"
+  );
+
+  for (let i = 0; i < result_list.length; i++) {
+    const q = questionbank[result_list[i]];
+
+    if (settings_search_name && typeof q.name === "string") {
+      q.name = q.name.replace(pattern, replacement);
+    }
+
+    if (settings_search_text && typeof q.question_text === "string") {
+      q.question_text = q.question_text.replace(pattern, replacement);
+    }
+
+    if (settings_search_choices && Array.isArray(q.choices)) {
+      q.choices = q.choices.map(str =>
+        typeof str === "string" ? str.replace(pattern, replacement) : str
+      );
+    }
+
+    if (settings_search_tags && Array.isArray(q.tags)) {
+      q.tags = q.tags.map(str =>
+        typeof str === "string" ? str.replace(pattern, replacement) : str
+      );
+    }
+  }
+
+  alert_box(result_list.length + " questions modified.");
+  $("#replace_btn").hide();
+  $("#search_select_results_btn").hide();
+  $("#search_results").empty();
 }
 
 //finds the global search term using the global search parameters and returns an array with the numbers of the matches
@@ -3440,24 +3490,30 @@ document.getElementById("main_menu_info").innerHTML=element.dataset.info;
 	<div id="sidebar_wrapper" style="width: calc(100% - 45% - 25%)">
 	<div id="sidebar-tabs">
   <div class="tab-header">
-    <button class="tab-button active" data-tab="search">🔍 Search</button>
+    <button class="tab-button active" data-tab="search">🔍 Search/Replace</button>
     <button class="tab-button" data-tab="bulk-create">📋 Bulk Create</button>
   </div>
 
   <div class="tab-content" id="tab-search">
 		<div style="position:relative; margin:auto; width:95%")>
-		<label for="search_text">Search: </label> <input type="text" id="search_text" size="30" value=""><br><br>
+		<label for="search_text">Search: </label> <input type="text" id="search_text" size="25" value="">&nbsp;&nbsp;<label for="replace_text">Replace: </label> <input type="text" id="replacement_text" size="25" value=""><br><br>
+		<b>Search in...</b><br>
 		<label for="search_option_name">Names:</label><input type="checkbox" id="search_option_name" checked>&nbsp;&nbsp;
-		<label for="search_option_text">Question text:</label><input type="checkbox" id="search_option_text" checked>&nbsp;&nbsp;
+		<label for="search_option_text">Question texts:</label><input type="checkbox" id="search_option_text" checked>&nbsp;&nbsp;
 		<label for="search_option_choices">Choices:</label><input type="checkbox" id="search_option_choices" checked>&nbsp;&nbsp;
-		<label for="search_option_tags">Tags:</label><input type="checkbox" id="search_option_tags" checked>&nbsp;<br>
+		<label for="search_option_tags">Tags:</label><input type="checkbox" id="search_option_tags" checked>&nbsp;<br><br>
 		<label for="search_option_casesensitive">Case sensitive:</label><input type="checkbox" id="search_option_casesensitive" checked>&nbsp;&nbsp;
-		<label for="search_option_wholewords">Whole words only:</label><input type="checkbox" id="search_option_wholewords"><br>
-		<label for="search_option_onlyissues">Only questions with issues:</label><input type="checkbox" id="search_option_onlyissues">
-		<center><button onclick="store_search_parameters(); output_search_results(find_text());" class="menu_btn">Search</button>
-		<br>You can click the search results to open them in the question bank.<br>
+		<label for="search_option_wholewords">Whole words only:</label><input type="checkbox" id="search_option_wholewords">&nbsp;&nbsp;
+		<label for="search_option_onlyissues">Only questions with issues:</label><input type="checkbox" id="search_option_onlyissues"><br><br>
+		<center><button onclick="store_search_parameters(); output_search_results(find_text());" class="menu_btn">Search</button>&nbsp;&nbsp;
+		<button id="replace_btn" onclick="replace_text(find_text());" class="menu_btn" style="display:none;">Replace</button>
+		<br>Click the search results to open them in the question bank.<br>
 		<div id="search_results" style="position:relative; width: 100%; height: 200px; overflow-y: auto; margin: auto;"></div>
-		<button onclick="check_questions(find_text());" class="menu_btn" id="search_select_results_btn" style="display:none;">Select results</button></center></div>
+		<button onclick="check_questions(find_text());" class="menu_btn" id="search_select_results_btn" style="display:none;">Select results</button>
+		
+		</center></div>
+		
+
 	</div>
 
   <div class="tab-content" id="tab-bulk-create" style="display: none;">
