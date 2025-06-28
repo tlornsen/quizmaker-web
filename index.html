@@ -287,8 +287,13 @@ function load_file(evt) {
 								question.value.push(choices[choice_nr].getAttribute('fraction'));
 								else question.value.push(0);								
 												
-							if (choices[choice_nr].getElementsByTagName('feedback')[0] && choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0])
-							question.feedback.push(choices[choice_nr].getElementsByTagName('feedback')[0].childNodes[0].nodeValue);				
+							let fb = choices[choice_nr].getElementsByTagName('feedback')[0];
+let fbText = fb.getElementsByTagName('text')[0];
+if (fbText && fbText.childNodes[0]) {
+  question.feedback.push(fbText.childNodes[0].nodeValue);
+} else {
+  question.feedback.push("");
+}			
 						}
 						
 					questionbank.push(question);	//store the imported question in the database		
